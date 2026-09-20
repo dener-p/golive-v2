@@ -339,7 +339,7 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
     let options = gstreamer::Structure::new_empty("create-offer-options");
     entry
         .webrtcbin
-        .emit_by_name::<()>("create-offer", &[&promise, &options]);
+        .emit_by_name::<()>("create-offer", &[&options, &promise]);
     Ok(())
 }
 
