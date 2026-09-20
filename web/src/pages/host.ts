@@ -1,7 +1,6 @@
 import { api } from '../api';
 import { ensureUser } from '../session';
 import { loginCard, nav, qs, esc, watchLink } from '../ui';
-import { TestHost } from '../host-session';
 import { invalidateIceConfig } from '../webrtc';
 
 export async function renderHost(root: HTMLElement, query: URLSearchParams): Promise<void> {
@@ -25,30 +24,13 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   // --- state -------------------------------------------------------------
   let roomId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let testStatsTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   /** Command id we most recently sent; used to report its ack (or staleness). */
   let lastSentId: string | null = null;
 
-  const test = new TestHost((text, kind) => {
-    if (disposed) return;
-    const status = root.querySelector('#test-status');
-    if (!status) return;
-    status.textContent = text;
-    status.className = `statusline ${kind}`;
-    const stopBtn = root.querySelector('#test-stop') as HTMLButtonElement | null;
-    const startBtn = root.querySelector('#test-start') as HTMLButtonElement | null;
-    const screenBtn = root.querySelector('#test-screen') as HTMLButtonElement | null;
-    if (startBtn) startBtn.disabled = test.running;
-    if (screenBtn) screenBtn.disabled = test.running;
-    if (stopBtn) stopBtn.disabled = !test.running;
-  });
-
   const cleanup = (): void => {
     disposed = true;
     if (pollTimer) clearInterval(pollTimer);
-    if (testStatsTimer) clearInterval(testStatsTimer);
-    test.cleanup();
   };
   window.addEventListener('pagehide', cleanup);
 
@@ -86,8 +68,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           <span class="muted" id="helper-last-seen"></span>
         </div>
         <p class="muted">
-          Run <code>bun run helper:stub</code> to simulate the native helper. It connects outbound
-          to the backend, reports presence, and acks commands — the browser never talks to it directly.
+          Run <code>cargo run</code> in <code>helper/</code> to start the native helper.
+          It captures your screen, encodes AV1, and streams to viewers through the backend.
         </p>
         <div class="row">
           <button id="cmd-start" class="primary" disabled>Start live</button>
@@ -132,24 +114,6 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           <span class="statusline muted" id="turn-status"></span>
         </div>
       </div>
-
-      <div class="card">
-        <h2>Test broadcast (in-browser host)</h2>
-        <p class="muted">
-          Emulates the native helper from this browser to exercise the signaling relay
-          (SDP/ICE + N peer connections) before any native code exists.
-        </p>
-        <div class="row">
-          <button id="test-start" class="primary" ${roomId ? '' : 'disabled'}>Start test broadcast</button>
-          <button id="test-screen" ${roomId ? '' : 'disabled'}>Share screen instead</button>
-          <button id="test-stop" class="danger" disabled>Stop</button>
-          <span class="muted" id="test-viewers"></span>
-        </div>
-        <div class="statusline muted" id="test-status">${
-          roomId ? '' : 'Create or enter a room id to enable the test host.'
-        }</div>
-        <div class="statusline mono muted" id="test-stats" hidden></div>
-      </div>
     `;
 
     // room
@@ -178,7 +142,6 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       });
       root.querySelector('#leave-room')?.addEventListener('click', () => {
         roomId = null;
-        test.cleanup();
         render();
       });
     }
@@ -305,43 +268,14 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       }
     });
 
-    // test host
-    root.querySelector('#test-start')?.addEventListener('click', () => {
-      if (roomId) void test.start(roomId);
-    });
-    root.querySelector('#test-screen')?.addEventListener('click', async () => {
-      await test.pickSource(true);
-      if (roomId && test.stream) void test.start(roomId);
-    });
-    root.querySelector('#test-stop')?.addEventListener('click', () => test.stop());
-
-    // test-host diagnostics (while a test broadcast is running)
-    if (testStatsTimer) clearInterval(testStatsTimer);
-    testStatsTimer = setInterval(() => void refreshTestStats(), 2000);
-
     // Load allowlist if we're in a room
     if (roomId) void refreshAllowlist();
-  };
-
-  const refreshTestStats = async (): Promise<void> => {
-    const el = qs(root, '#test-stats');
-    if (!el || disposed) return;
-    if (!test.running) {
-      el.hidden = true;
-      el.textContent = '';
-      return;
-    }
-    const lines = await test.diagnostics();
-    if (lines.length > 0) {
-      el.textContent = lines.join('\n');
-      el.hidden = false;
-    }
   };
 
   const setRoomCreator = (): void => {
     if (!roomId) return;
     const el = root.querySelector('#room-creator');
-    if (el && test) {
+    if (el) {
       void api
         .getRoom(roomId)
         .then(({ room }) => {

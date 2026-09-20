@@ -35,9 +35,8 @@ pub struct ViewerContext {
 
 pub struct ViewerEntry {
     pub webrtcbin: gstreamer::Element,
+    pub capsfilter: gstreamer::Element,
     pub ctx: Arc<Mutex<ViewerContext>>,
-    /// Tee source pad name (e.g. "src_0") so we can unlink on removal.
-    pub tee_pad_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -147,23 +146,33 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .context("failed to create webrtcbin")?;
     webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
 
+    // tee src pads have no caps until data flows, but webrtcbin's sink_%u
+    // expects RTP caps. Insert a capsfilter to bridge the gap.
+    let capsfilter = gstreamer::ElementFactory::make("capsfilter")
+        .build()
+        .context("failed to create capsfilter")?;
+    capsfilter.set_property(
+        "caps",
+        AV1_RTP_CAPS_STR.parse::<gstreamer::Caps>().unwrap(),
+    );
+
     session
         .pipeline
-        .add(&webrtcbin)
-        .context("cannot add webrtcbin to pipeline")?;
+        .add_many([&webrtcbin, &capsfilter])
+        .context("cannot add elements to pipeline")?;
 
-    // webrtcbin uses request pads (sink_%u), not a static "sink".
-    // Request one and link it to the tee src pad.
-    let webrtcbin_sink_template = webrtcbin
+    // Link: tee_src_pad -> capsfilter -> webrtcbin
+    let cf_sink = capsfilter.static_pad("sink").context("capsfilter has no sink")?;
+    tee_src_pad.link(&cf_sink).context("could not link tee -> capsfilter")?;
+
+    let cf_src = capsfilter.static_pad("src").context("capsfilter has no src")?;
+    let wb_sink_template = webrtcbin
         .pad_template("sink_%u")
         .context("webrtcbin has no sink_%u pad template")?;
-    let webrtcbin_sink = webrtcbin
-        .request_pad(&webrtcbin_sink_template, None, None)
+    let wb_sink = webrtcbin
+        .request_pad(&wb_sink_template, None, None)
         .context("could not request webrtcbin sink pad")?;
-
-    tee_src_pad
-        .link(&webrtcbin_sink)
-        .context("could not link tee -> webrtcbin")?;
+    cf_src.link(&wb_sink).context("could not link capsfilter -> webrtcbin")?;
 
     // Let the new element adopt the pipeline's running state.
     webrtcbin
@@ -226,8 +235,8 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         peer_id.to_string(),
         ViewerEntry {
             webrtcbin,
+            capsfilter,
             ctx,
-            tee_pad_name: pad_name,
         },
     );
 
@@ -259,20 +268,19 @@ pub fn remove_viewer(session: &mut StreamSession, peer_id: &str) {
         return;
     };
 
-    // Unlink and release the tee pad.
-    if let Some(pad) = entry.webrtcbin.static_pad("sink") {
-        if let Some(tee_pad) = pad.peer() {
-            // Check if this pad belongs to the tee by name.
-            if tee_pad.name() == entry.tee_pad_name {
-                let _ = tee_pad.unlink(&pad);
-                session.tee.release_request_pad(&tee_pad);
-            }
+    // Unlink tee -> capsfilter (the capsfilter's sink peer is the tee src pad).
+    if let Some(cf_sink) = entry.capsfilter.static_pad("sink") {
+        if let Some(tee_pad) = cf_sink.peer() {
+            let _ = tee_pad.unlink(&cf_sink);
+            session.tee.release_request_pad(&tee_pad);
         }
     }
 
-    // Remove webrtcbin from pipeline (sets it to NULL first).
+    // Remove all elements from pipeline (NULL them first).
     let _ = entry.webrtcbin.set_state(gstreamer::State::Null);
+    let _ = entry.capsfilter.set_state(gstreamer::State::Null);
     let _ = session.pipeline.remove(&entry.webrtcbin);
+    let _ = session.pipeline.remove(&entry.capsfilter);
 
     info!("removed viewer {peer_id}");
 }

@@ -222,17 +222,19 @@ impl App {
             } => {
                 if ok {
                     let rid = room_id.as_deref().unwrap_or("?");
+                    let existing = viewers.unwrap_or_default();
                     info!(
                         "attached to room {rid} ({:?} viewer(s) waiting: {:?})",
                         viewer_count.unwrap_or(0),
-                        viewers.unwrap_or_default()
+                        existing
                     );
-                    // Set room_id on all existing viewer contexts + any
-                    // viewers that arrived before attach-ack.
+                    // Create webrtcbin + offer for each viewer already in the room.
                     if let Some(rid) = &room_id {
-                        if let Some(s) = &self.session {
-                            for pid in s.viewers.keys().cloned().collect::<Vec<_>>() {
-                                pipeline::set_viewer_room(s, &pid, rid);
+                        for pid in &existing {
+                            self.add_viewer(pid);
+                            // Set room_id now that we know it.
+                            if let Some(s) = &self.session {
+                                pipeline::set_viewer_room(s, pid, rid);
                             }
                         }
                     }
