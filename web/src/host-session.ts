@@ -176,6 +176,7 @@ export class TestHost {
           type: 'sdp',
           roomId: this.roomId,
           sdp: { type: pc.localDescription.type as 'offer', sdp: pc.localDescription.sdp },
+          target: viewerId,
         });
       }
       this.onUpdate(this.describe(), 'ok');

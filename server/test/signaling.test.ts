@@ -56,12 +56,12 @@ describe('signaling', () => {
 
     // host offer -> both viewers
     handleSignal(host, { type: 'sdp', roomId: room.roomId, sdp: { type: 'offer', sdp: 'OFFER' } });
-    expect(viewerA.sent).toContainEqual({ type: 'sdp', from: 'host', peerId: 'h1', sdp: { type: 'offer', sdp: 'OFFER' } });
-    expect(viewerB.sent).toContainEqual({ type: 'sdp', from: 'host', peerId: 'h1', sdp: { type: 'offer', sdp: 'OFFER' } });
+    expect(viewerA.sent).toContainEqual({ type: 'sdp', roomId: room.roomId, from: 'host', peerId: 'h1', sdp: { type: 'offer', sdp: 'OFFER' } });
+    expect(viewerB.sent).toContainEqual({ type: 'sdp', roomId: room.roomId, from: 'host', peerId: 'h1', sdp: { type: 'offer', sdp: 'OFFER' } });
 
     // viewerA answer -> host only
     handleSignal(viewerA, { type: 'sdp', roomId: room.roomId, sdp: { type: 'answer', sdp: 'ANSWER-A' } });
-    expect(host.sent).toContainEqual({ type: 'sdp', from: 'viewer', peerId: 'vA', sdp: { type: 'answer', sdp: 'ANSWER-A' } });
+    expect(host.sent).toContainEqual({ type: 'sdp', roomId: room.roomId, from: 'viewer', peerId: 'vA', sdp: { type: 'answer', sdp: 'ANSWER-A' } });
     expect(viewerB.sent).not.toContainEqual(
       expect.objectContaining({ from: 'viewer' }) as never,
     );
@@ -69,9 +69,9 @@ describe('signaling', () => {
     // ICE relay both directions
     const candidate = { candidate: 'candidate:1 1 udp', sdpMid: '0', sdpMLineIndex: 0, usernameFragment: null };
     handleSignal(host, { type: 'ice', roomId: room.roomId, candidate });
-    expect(viewerA.sent).toContainEqual({ type: 'ice', from: 'host', peerId: 'h1', candidate });
+    expect(viewerA.sent).toContainEqual({ type: 'ice', roomId: room.roomId, from: 'host', peerId: 'h1', candidate });
     handleSignal(viewerA, { type: 'ice', roomId: room.roomId, candidate });
-    expect(host.sent).toContainEqual({ type: 'ice', from: 'viewer', peerId: 'vA', candidate });
+    expect(host.sent).toContainEqual({ type: 'ice', roomId: room.roomId, from: 'viewer', peerId: 'vA', candidate });
   });
 
   test('enforces role rules', () => {

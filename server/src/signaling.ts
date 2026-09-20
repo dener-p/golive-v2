@@ -135,11 +135,11 @@ export function handleSignal(socket: SignalingSocket, msg: ClientSignal): void {
   if (!member) return;
 
   if (msg.type === 'sdp') {
-    relaySdp(member, msg.sdp);
+    relaySdp(member, msg.sdp, msg.target);
     return;
   }
   if (msg.type === 'ice') {
-    relayIce(member, msg.candidate);
+    relayIce(member, msg.candidate, msg.target);
     return;
   }
   if (msg.type === 'leave') {
@@ -147,29 +147,46 @@ export function handleSignal(socket: SignalingSocket, msg: ClientSignal): void {
   }
 }
 
-function relaySdp(member: Member, sdp: SdpMessage): void {
+/**
+ * Relay a host→viewer frame to a single viewer. `target` is that viewer's
+ * `peerId` (each host connection is per-viewer, like the native helper's fan-out).
+ */
+function relayToViewer(roomId: string, targetPeerId: string, msg: ServerSignal): boolean {
+  const target = membersOf(roomId).find(
+    (m) => m.role === 'viewer' && m.peerId === targetPeerId,
+  );
+  if (target) {
+    send(target, msg);
+    return true;
+  }
+  return false;
+}
+
+function relaySdp(member: Member, sdp: SdpMessage, target?: string): void {
   if (member.role === 'host') {
-    broadcast(
-      member.roomId,
-      { type: 'sdp', from: 'host', peerId: member.peerId, sdp },
-      member.socket.id,
-    );
+    const msg: ServerSignal = { type: 'sdp', roomId: member.roomId, from: 'host', peerId: member.peerId, sdp };
+    if (target) {
+      relayToViewer(member.roomId, target, msg);
+    } else {
+      broadcast(member.roomId, msg, member.socket.id);
+    }
   } else {
     const host = hostOf(member.roomId);
-    if (host) send(host, { type: 'sdp', from: 'viewer', peerId: member.peerId, sdp });
+    if (host) send(host, { type: 'sdp', roomId: member.roomId, from: 'viewer', peerId: member.peerId, sdp });
   }
 }
 
-function relayIce(member: Member, candidate: IceCandidateMessage): void {
+function relayIce(member: Member, candidate: IceCandidateMessage, target?: string): void {
   if (member.role === 'host') {
-    broadcast(
-      member.roomId,
-      { type: 'ice', from: 'host', peerId: member.peerId, candidate },
-      member.socket.id,
-    );
+    const msg: ServerSignal = { type: 'ice', roomId: member.roomId, from: 'host', peerId: member.peerId, candidate };
+    if (target) {
+      relayToViewer(member.roomId, target, msg);
+    } else {
+      broadcast(member.roomId, msg, member.socket.id);
+    }
   } else {
     const host = hostOf(member.roomId);
-    if (host) send(host, { type: 'ice', from: 'viewer', peerId: member.peerId, candidate });
+    if (host) send(host, { type: 'ice', roomId: member.roomId, from: 'viewer', peerId: member.peerId, candidate });
   }
 }
 

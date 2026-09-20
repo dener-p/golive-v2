@@ -14,6 +14,7 @@ import {
   leaveSignaling,
   type SignalingSocket,
 } from './signaling';
+import { attachHelperToRoom, helperSignalingSocket } from './helperSignaling';
 import {
   registerHelper,
   unregisterHelper,
@@ -155,21 +156,85 @@ app.get(
         }
 
         touchHelper(user.id, connId);
+
         if (msg.type === 'status') {
           updateHelperState(user.id, connId, msg.state, msg.detail);
-        } else if (msg.type === 'ack') {
+          return;
+        }
+        if (msg.type === 'ack') {
           handleHelperAck(user.id, connId, msg);
+          return;
+        }
+
+        // --- room media signaling (helper as host) -------------------------
+        const helperSocket = helperSignalingSocket(connId, (raw) => ws.send(raw));
+
+        if (msg.type === 'attach-room') {
+          const roomId = (msg.roomId ?? '').trim().toLowerCase();
+          if (!roomId) {
+            sendAttachError(ws, 'bad_request', 'attach-room requires a roomId');
+            return;
+          }
+          const result = attachHelperToRoom(helperSocket, roomId, user.id);
+          if (!result.ok) {
+            sendAttachError(ws, result.code, result.message);
+            return;
+          }
+          attachedRooms.set(connId, result.roomId);
+          return;
+        }
+        if (msg.type === 'detach-room') {
+          leaveSignaling(connId);
+          attachedRooms.delete(connId);
+          return;
+        }
+        if (msg.type === 'room-sdp' || msg.type === 'room-ice') {
+          if (!attachedRooms.has(connId)) {
+            sendAttachError(ws, 'not_attached', 'Attach to a room before sending media signals');
+            return;
+          }
+          if (msg.type === 'room-sdp') {
+            handleSignal(helperSocket, {
+              type: 'sdp',
+              roomId: msg.roomId,
+              sdp: msg.sdp,
+              target: msg.peerId,
+            });
+          } else {
+            handleSignal(helperSocket, {
+              type: 'ice',
+              roomId: msg.roomId,
+              candidate: msg.candidate,
+              target: msg.peerId,
+            });
+          }
         }
       },
       onClose() {
         if (user) {
           clearPending(connId);
-          if (registered) unregisterHelper(user.id, connId);
+          if (registered) {
+            unregisterHelper(user.id, connId);
+            leaveSignaling(connId);
+            attachedRooms.delete(connId);
+          }
         }
       },
     };
   }),
 );
+
+function sendAttachError(ws: { send(data: string): void }, code: string, message: string): void {
+  const out: ServerHelperMessage = {
+    type: 'attach-ack',
+    ok: false,
+    error: { code, message },
+  };
+  ws.send(JSON.stringify(out));
+}
+
+/** Helper connections currently attached to a room (connId → roomId). */
+const attachedRooms = new Map<string, string>();
 
 // ---------------------------------------------------------------------------
 // Static web app (built output) with SPA fallback
