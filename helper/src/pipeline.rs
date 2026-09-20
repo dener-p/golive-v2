@@ -307,25 +307,17 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
                 return;
             }
         };
-        let sdp_obj = match reply.get::<gstreamer_sdp::SDPMessage>("offer") {
-            Ok(sdp) => sdp,
-            Err(_) => match reply.get::<gstreamer::Structure>("offer") {
-                Ok(stru) => match stru.get::<gstreamer_sdp::SDPMessage>("sdp") {
-                    Ok(s) => s,
-                    Err(_) => {
-                        warn!("create-offer reply structure has no sdp message");
-                        return;
-                    }
-                },
-                Err(_) => {
-                    warn!("create-offer reply has no offer field");
-                    return;
-                }
-            },
+        let offer = match reply.get::<gstreamer_webrtc::WebRTCSessionDescription>("offer") {
+            Ok(o) => o,
+            Err(e) => {
+                warn!("create-offer reply missing 'offer' field: {e}");
+                return;
+            }
         };
+        let sdp_obj = offer.sdp();
         let text = sdp_obj.to_string();
         info!("offer ready for viewer {viewer_peer_id}");
-        let _ = webrtcbin.emit_by_name::<()>("set-local-description", &[&sdp_obj]);
+        let _ = webrtcbin.emit_by_name::<()>("set-local-description", &[&offer]);
         let _ = out.send(Client::RoomSdp {
             room_id,
             peer_id: viewer_peer_id,

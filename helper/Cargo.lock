@@ -575,6 +575,7 @@ dependencies = [
  "glib 0.18.5",
  "gstreamer",
  "gstreamer-sdp",
+ "gstreamer-webrtc",
  "log",
  "reqwest",
  "serde",
@@ -640,6 +641,32 @@ checksum = "71f147e7c6bc9313d5569eb15da61f6f64026ec69791922749de230583a07286"
 dependencies = [
  "glib-sys 0.19.8",
  "gobject-sys 0.19.8",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
+name = "gstreamer-webrtc"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfd1a55fc34cd2ba2be1dc694a49cf3be71c67cbcd28e80213123eebeb9b2b9f"
+dependencies = [
+ "glib 0.19.9",
+ "gstreamer",
+ "gstreamer-sdp",
+ "gstreamer-webrtc-sys",
+ "libc",
+]
+
+[[package]]
+name = "gstreamer-webrtc-sys"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49c3bdbed1d328b7823f05a079b1319eea7b452c4b6a3e6776a1788827dad96c"
+dependencies = [
+ "glib-sys 0.19.8",
+ "gstreamer-sdp-sys",
+ "gstreamer-sys",
  "libc",
  "system-deps",
 ]

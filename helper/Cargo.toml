@@ -11,6 +11,7 @@ futures-util = "0.3"
 glib = "0.18"
 gstreamer = "0.22"
 gstreamer-sdp = "0.22"
+gstreamer-webrtc = "0.22"
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
