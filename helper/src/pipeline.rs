@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use gstreamer::prelude::*;
+use gstreamer::PadLinkCheck;
 use log::{error, info, warn};
 
 use crate::protocol::{Client, IceCandidate, SdpMessage};
@@ -35,7 +36,10 @@ pub struct ViewerContext {
 
 pub struct ViewerEntry {
     pub webrtcbin: gstreamer::Element,
-    pub capsfilter: gstreamer::Element,
+    /// Queue sits between tee and webrtcbin. It provides a thread boundary and
+    /// absorbs data flow so that dynamic pad linking in a PLAYING pipeline
+    /// works reliably.
+    pub queue: gstreamer::Element,
     pub ctx: Arc<Mutex<ViewerContext>>,
 }
 
@@ -55,12 +59,6 @@ pub struct StreamSession {
 }
 
 const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
-
-/// The caps rtpav1pay produces for AV1 RTP (payload type 96, 90 kHz clock).
-const AV1_RTP_CAPS_STR: &str = concat!(
-    "application/x-rtp, media=(string)video, encoding-name=(string)AV1, ",
-    "payload=(int)96, clock-rate=(int)90000, encoding-params=(string)1"
-);
 
 // ---------------------------------------------------------------------------
 // Build the base pipeline (up to tee — no webrtcbin yet)
@@ -117,9 +115,8 @@ pub fn build(out: tokio::sync::mpsc::UnboundedSender<Client>) -> Result<StreamSe
 // Add / remove viewers (dynamic webrtcbin instances)
 // ---------------------------------------------------------------------------
 
-/// Create a new webrtcbin for `peer_id`, link it to a fresh tee src pad,
-/// pre-push AV1 caps so negotiation can start immediately, and wire up
-/// the signal handlers.
+/// Create a new webrtcbin for `peer_id`, link it to a fresh tee src pad
+/// via a queue (standard tee fan-out pattern), and wire up signal handlers.
 pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
     if session.viewers.contains_key(peer_id) {
         return Ok(()); // already tracked
@@ -139,42 +136,52 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .request_pad(&tee_pad_template, Some(&pad_name), None)
         .with_context(|| format!("could not request tee pad {pad_name}"))?;
 
-    // --- create webrtcbin -----------------------------------------------------
+    // --- create queue + webrtcbin ---------------------------------------------
+    // The queue sits between tee and webrtcbin. It provides a thread boundary
+    // and absorbs data flow so dynamic pad linking in a PLAYING pipeline works.
+    let queue = gstreamer::ElementFactory::make("queue")
+        .property_from_str("name", &format!("q_{peer_id}"))
+        .build()
+        .context("failed to create queue")?;
+
     let webrtcbin = gstreamer::ElementFactory::make("webrtcbin")
         .property_from_str("name", &format!("wc_{peer_id}"))
         .build()
         .context("failed to create webrtcbin")?;
     webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
 
-    // tee src pads have no caps until data flows, but webrtcbin's sink_%u
-    // expects RTP caps. Insert a capsfilter to bridge the gap.
-    let capsfilter = gstreamer::ElementFactory::make("capsfilter")
-        .build()
-        .context("failed to create capsfilter")?;
-    capsfilter.set_property(
-        "caps",
-        AV1_RTP_CAPS_STR.parse::<gstreamer::Caps>().unwrap(),
-    );
-
     session
         .pipeline
-        .add_many([&webrtcbin, &capsfilter])
+        .add_many([&queue, &webrtcbin])
         .context("cannot add elements to pipeline")?;
 
-    // Link: tee_src_pad -> capsfilter -> webrtcbin
-    let cf_sink = capsfilter.static_pad("sink").context("capsfilter has no sink")?;
-    tee_src_pad.link(&cf_sink).context("could not link tee -> capsfilter")?;
+    // --- link: tee_src_pad -> queue -> webrtcbin ------------------------------
+    // Use link_full with PadLinkCheck::NOTHING to bypass the caps compatibility
+    // check that fails when linking to a tee request pad in a PLAYING pipeline.
+    // GStreamer will negotiate caps at runtime when data starts flowing.
+    {
+        let q_sink = queue.static_pad("sink").context("queue has no sink")?;
+        tee_src_pad
+            .link_full(&q_sink, PadLinkCheck::empty())
+            .map_err(|e| anyhow!("could not link tee -> queue: {e}"))?;
+    }
+    {
+        let q_src = queue.static_pad("src").context("queue has no src")?;
+        let wb_sink_template = webrtcbin
+            .pad_template("sink_%u")
+            .context("webrtcbin has no sink_%u pad template")?;
+        let wb_sink = webrtcbin
+            .request_pad(&wb_sink_template, None, None)
+            .context("could not request webrtcbin sink pad")?;
+        q_src
+            .link_full(&wb_sink, PadLinkCheck::empty())
+            .map_err(|e| anyhow!("could not link queue -> webrtcbin: {e}"))?;
+    }
 
-    let cf_src = capsfilter.static_pad("src").context("capsfilter has no src")?;
-    let wb_sink_template = webrtcbin
-        .pad_template("sink_%u")
-        .context("webrtcbin has no sink_%u pad template")?;
-    let wb_sink = webrtcbin
-        .request_pad(&wb_sink_template, None, None)
-        .context("could not request webrtcbin sink pad")?;
-    cf_src.link(&wb_sink).context("could not link capsfilter -> webrtcbin")?;
-
-    // Let the new element adopt the pipeline's running state.
+    // Let the new elements adopt the pipeline's running state.
+    queue
+        .sync_state_with_parent()
+        .context("queue sync_state failed")?;
     webrtcbin
         .sync_state_with_parent()
         .context("webrtcbin sync_state failed")?;
@@ -210,32 +217,13 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         None
     });
 
-    // --- pre-push AV1 caps so negotiation isn't blocked on first frame ---------
-    // NOTE: webrtcbin creates sink_%u pads lazily after the pipeline reaches
-    // PLAYING.  If the pad doesn't exist yet, skip the pre-push — the first
-    // encoded frame will carry the caps anyway.
-    {
-        let mut has_sink = false;
-        for pad in webrtcbin.pads() {
-            if pad.name().starts_with("sink_") {
-                has_sink = true;
-                break;
-            }
-        }
-        if has_sink {
-            pre_push_caps(session, &webrtcbin);
-        } else {
-            info!("webrtcbin sink pad not yet created — skipping pre-push caps for viewer {peer_id}");
-        }
-    }
-
     info!("added viewer {peer_id} (tee pad {pad_name})");
 
     session.viewers.insert(
         peer_id.to_string(),
         ViewerEntry {
             webrtcbin,
-            capsfilter,
+            queue,
             ctx,
         },
     );
@@ -261,26 +249,26 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove a viewer: unlink its webrtcbin from the tee, remove from pipeline,
+/// Remove a viewer: unlink its queue from the tee, remove from pipeline,
 /// release the tee src pad.
 pub fn remove_viewer(session: &mut StreamSession, peer_id: &str) {
     let Some(entry) = session.viewers.remove(peer_id) else {
         return;
     };
 
-    // Unlink tee -> capsfilter (the capsfilter's sink peer is the tee src pad).
-    if let Some(cf_sink) = entry.capsfilter.static_pad("sink") {
-        if let Some(tee_pad) = cf_sink.peer() {
-            let _ = tee_pad.unlink(&cf_sink);
+    // Unlink tee -> queue (the queue's sink peer is the tee src pad).
+    if let Some(q_sink) = entry.queue.static_pad("sink") {
+        if let Some(tee_pad) = q_sink.peer() {
+            let _ = tee_pad.unlink(&q_sink);
             session.tee.release_request_pad(&tee_pad);
         }
     }
 
     // Remove all elements from pipeline (NULL them first).
     let _ = entry.webrtcbin.set_state(gstreamer::State::Null);
-    let _ = entry.capsfilter.set_state(gstreamer::State::Null);
+    let _ = entry.queue.set_state(gstreamer::State::Null);
     let _ = session.pipeline.remove(&entry.webrtcbin);
-    let _ = session.pipeline.remove(&entry.capsfilter);
+    let _ = session.pipeline.remove(&entry.queue);
 
     info!("removed viewer {peer_id}");
 }
@@ -403,41 +391,6 @@ pub fn play(session: &StreamSession) -> Result<()> {
         .set_state(gstreamer::State::Playing)
         .map(|_| ())
         .map_err(|_| anyhow!("could not set pipeline to PLAYING"))
-}
-
-fn pre_push_caps(_session: &StreamSession, webrtcbin: &gstreamer::Element) {
-    let caps = match AV1_RTP_CAPS_STR.parse::<gstreamer::Caps>() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("invalid AV1_RTP_CAPS_STR: {e}");
-            return;
-        }
-    };
-    let Some(sink_pad) = webrtcbin
-        .pads()
-        .into_iter()
-        .find(|p| p.name().starts_with("sink_"))
-    else {
-        // webrtcbin may not have created sink_%u pads yet (happens on first
-        // link); fall back to the static "sink" pad.
-        if let Some(sink) = webrtcbin.static_pad("sink") {
-            if let Some(peer) = sink.peer() {
-                if !peer.push_event(gstreamer::event::Caps::new(&caps)) {
-                    warn!("pre-push of AV1 caps was rejected (static sink)");
-                }
-            }
-        } else {
-            warn!("webrtcbin sink pad not found — cannot pre-push caps");
-        }
-        return;
-    };
-    if let Some(peer) = sink_pad.peer() {
-        if !peer.push_event(gstreamer::event::Caps::new(&caps)) {
-            warn!("pre-push of AV1 caps was rejected");
-        } else {
-            info!("pre-pushed AV1 caps onto webrtcbin sink pad");
-        }
-    }
 }
 
 pub fn stop(session: &StreamSession) -> Result<()> {
