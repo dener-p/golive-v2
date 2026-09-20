@@ -317,7 +317,15 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
         let sdp_obj = offer.sdp();
         let text = sdp_obj.to_string();
         info!("offer ready for viewer {viewer_peer_id}");
-        let _ = webrtcbin.emit_by_name::<()>("set-local-description", &[&offer]);
+        let vp_id = viewer_peer_id.clone();
+        let set_local_promise = gstreamer::Promise::with_change_func(move |res| {
+            match res {
+                Ok(Some(_)) => info!("set-local-description succeeded for viewer {vp_id}"),
+                Ok(None) => warn!("set-local-description promise cancelled for viewer {vp_id}"),
+                Err(e) => warn!("set-local-description failed for viewer {vp_id}: {e:?}"),
+            }
+        });
+        let _ = webrtcbin.emit_by_name::<()>("set-local-description", &[&offer, &set_local_promise]);
         let _ = out.send(Client::RoomSdp {
             room_id,
             peer_id: viewer_peer_id,
