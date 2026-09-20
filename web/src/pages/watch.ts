@@ -2,6 +2,7 @@ import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
 import { connectSignaling, type SignalingClient } from '../signaling';
 import { api } from '../api';
 import { ensureUser } from '../session';
+import { samplePeerStats, summarizeStats, pathLabel, type StatsState } from '../stats';
 import {
   AV1_FIRST,
   createPeer,
@@ -68,7 +69,11 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     </div>
 
     <div class="statusline muted" id="stream-status"></div>
-    <div class="statusline muted" id="conn-status"></div>
+    <div class="row">
+      <span id="path-badge" class="badge" hidden></span>
+      <span class="statusline muted" id="conn-status"></span>
+    </div>
+    <div class="statusline muted" id="stats-line" hidden></div>
   `;
 
   root.querySelector('#copy-watch-link')?.addEventListener('click', (e) => {
@@ -83,6 +88,8 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   const streamStatus = qs(root, '#stream-status');
   const connStatus = qs(root, '#conn-status');
   const hostState = qs(root, '#host-state');
+  const statsLine = qs(root, '#stats-line');
+  const pathBadge = qs(root, '#path-badge');
 
   const setWaiting = (text: string): void => {
     waitingText.textContent = text;
@@ -93,10 +100,41 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   let answered = false;
   let gotHostSignal = false;
   let wsClosed = false;
+  let statsTimer: ReturnType<typeof setInterval> | null = null;
+  let statsState: StatsState | undefined;
 
   const peerId = crypto.randomUUID();
 
+  const stopStats = (): void => {
+    if (statsTimer) clearInterval(statsTimer);
+    statsTimer = null;
+  };
+
+  const renderStats = async (): Promise<void> => {
+    if (!pc || pc.connectionState !== 'connected') return;
+    try {
+      const { snapshot, state } = await samplePeerStats(pc, statsState);
+      statsState = state;
+      if (snapshot.path) {
+        pathBadge.hidden = false;
+        pathBadge.textContent = pathLabel(snapshot.path);
+        pathBadge.className = `badge ${snapshot.path === 'relayed' ? 'warn' : 'ok'}`;
+      }
+      statsLine.hidden = false;
+      statsLine.textContent = summarizeStats(snapshot);
+    } catch {
+      /* transient */
+    }
+  };
+
+  const startStats = (): void => {
+    if (statsTimer) return;
+    void renderStats();
+    statsTimer = setInterval(() => void renderStats(), 2000);
+  };
+
   const tearDown = (): void => {
+    stopStats();
     pc?.close();
     pc = null;
   };
@@ -119,6 +157,13 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
         onStateChange: (state) => {
           connStatus.textContent = `Peer ${state}.`;
           connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
+          if (state === 'connected') {
+            startStats();
+          } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+            stopStats();
+            statsLine.hidden = true;
+            pathBadge.hidden = true;
+          }
         },
       });
       // Recv-only video; AV1 preferred when available.

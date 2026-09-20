@@ -1,4 +1,4 @@
-# Signaling protocol (M0)
+# Signaling protocol
 
 A shared backend relays everything; media flows **directly** between host and viewer over WebRTC.
 All signaling messages are JSON over WebSocket. Identities come from the session cookie.
@@ -7,8 +7,8 @@ All signaling messages are JSON over WebSocket. Identities come from the session
 
 | Endpoint | Who | Purpose |
 | --- | --- | --- |
-| `GET /ws?roomId=…&role=host\|viewer` | browsers (host emulation & viewers; future: native helper as host) | Room signaling: SDP/ICE relay, presence |
-| `GET /ws/helper` | native helper | Presence + control channel (commands from host browser) |
+| `GET /ws?roomId=…&role=host\|viewer` | browsers (host emulation & viewers) | Room signaling: SDP/ICE relay, presence |
+| `GET /ws/helper` | native helper (or helper-stub) | Presence + control channel (commands from host browser) + room media signaling as host (M2+) |
 
 ### Cookie auth
 Clients authenticate with the `session` cookie. Native clients (non-browser) must set the
@@ -84,15 +84,43 @@ Server → client:
 ## Flow: viewer receives a stream
 
 1. Viewer opens `/ws?roomId=X&role=viewer`, sends `join`.
-2. Host (browser emulation today, native helper later) opens `/ws?roomId=X&role=host`, sends `join`, then `sdp(offer)`.
+2. Host — browser-emulated test host today, native helper (M2) over the `/ws/helper`
+   channel later — sends `sdp(offer)` for the room.
 3. Server broadcasts the offer to viewers; each viewer answers and relays its `sdp(answer)` + `ice` to the host.
 4. Host relays its ICE candidates to each viewer; media flows **peer to peer**.
 
 No ICE/signaling server carries audio/video — this channel only relays SDP and ICE.
 
+## Connection diagnostics (browser, M0)
+
+Viewers and hosts sample `RTCPeerConnection.getStats()` every ~2s while connected:
+
+- ICE connection state, and the **selected candidate pair**: local/remote candidate types
+  `host` (direct, same network), `srflx` (direct, NAT-mapped), `relay` (TURN relayed).
+  UI labels `host`/`srflx` as **direct** and `relay` as **relayed**.
+- RTT (selected candidate pair `currentRoundTripTime`), packet loss, received bitrate
+  (byte deltas), FPS and resolution (inbound/outbound `video` RTP stats).
+
+## Helper room media signaling (M2, confirmed)
+
+The native helper is the room *host*, but it never opens the browser `/ws` connection —
+it carries room media signaling on its persistent `/ws/helper` channel:
+
+- Helper sends `attach-room { roomId }` when a `start` command names a room.
+- Host-browser viewers keep using `/ws` as today; the server relays their
+  `peer-joined`/`peer-left`, `sdp`, and `ice` frames onto the helper's `/ws/helper`
+  connection (prefixed so the helper can key per-viewer `peerId`), and the helper's
+  `sdp`/`ice` frames are broadcast to the room's viewers.
+- Detach (or close of the helper socket) removes the helper as host.
+
+## ICE/TURN policy (M3, confirmed)
+
+STUN always first. TURN is **optional and host-provided**: only if direct ICE fails and
+the host has configured TURN do we retry with it. If direct fails and no TURN is
+configured, the session stops with a clear host-facing error. There is **no** GoLive/shared
+TURN fallback. The final selected candidate type is logged so direct vs relayed is obvious.
+
 ## Future evolution (not M0)
 
-- Signal *renotification* / reconnect handling with thresholds.
-- The native helper will carry `sdp`/`ice` frames on its persistent `/ws/helper` channel (same
-  protocol messages) instead of a per-room browser connection.
-- Allowlist validation and short-lived TURN credential issuance (M2, host credential API).
+- Signal *renotification* / reconnect handling with thresholds (host-page UX, M5).
+- Allowlist validation and short-lived TURN credential issuance gated by viewer allowlist (M3/M5, host credential API).

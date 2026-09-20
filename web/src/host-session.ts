@@ -1,5 +1,6 @@
 import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
 import { connectSignaling, type SignalingClient } from './signaling';
+import { samplePeerStats, summarizeStats, type StatsState } from './stats';
 import {
   AV1_FIRST,
   createPeer,
@@ -23,6 +24,7 @@ export class TestHost {
   stream: MediaStream | null = null;
   private peers = new Map<string, RTCPeerConnection>();
   private iceQueues = new Map<string, IceCandidateMessage[]>();
+  private statsStates = new Map<string, StatsState>();
   private peerId = crypto.randomUUID();
   running = false;
 
@@ -90,6 +92,7 @@ export class TestHost {
     }
     this.peers.clear();
     this.iceQueues.clear();
+    this.statsStates.clear();
     this.client?.close();
     this.client = null;
     this.running = false;
@@ -210,5 +213,21 @@ export class TestHost {
   private describe(): string {
     const n = this.viewerCount;
     return `${n} viewer connection${n === 1 ? '' : 's'} from one source.`;
+  }
+
+  /** Diagnostics line per connected viewer (path, RTT, loss, bitrate, fps, res). */
+  async diagnostics(): Promise<string[]> {
+    const lines: string[] = [];
+    for (const [viewerId, pc] of this.peers) {
+      if (pc.connectionState !== 'connected') continue;
+      try {
+        const { snapshot, state } = await samplePeerStats(pc, this.statsStates.get(viewerId));
+        this.statsStates.set(viewerId, state);
+        lines.push(`viewer ${viewerId.slice(0, 8)}: ${summarizeStats(snapshot)}`);
+      } catch {
+        /* transient */
+      }
+    }
+    return lines;
   }
 }

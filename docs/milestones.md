@@ -1,38 +1,31 @@
 # Milestones
 
-Derived from the build order in `project.md` §5. M0 is what this repo ships today.
+Derived from `project.md` §5 (milestones 0–5). M1 ships in this repo; M0's remaining
+scope (connection diagnostics) is being finished now.
 
 | # | Deliverable | Status |
 | --- | --- | --- |
-| M0 | **Repo + shared signaling skeleton** — monorepo, Discord OAuth (dev fallback), room create/lookup, WebSocket SDP/ICE relay, browser-emulated host/viewer test page, helper-presence + command-relay endpoints, stub helper | ✅ |
-| M1 | **Control relay end to end** — trustworthy helper presence + host→helper command API exercised by a stub that actually receives/acks commands | ✅ |
-| M2 | **Credential API + TURN** — per-host credential API (Cloudflare TURN creds or coturn) issuing short-lived creds gated by viewer allowlist; `IceServers` endpoint returns TURN | ❌ |
-| M3 | **Native helper MVP** — capture + software AV1 encode (svtav1enc) + one peer connection, driven by real commands relayed through the backend | ❌ |
-| M4 | **Multi-viewer fan-out** — `tee` one encode into N peer connections, measure upload bandwidth vs viewer count (~10 target) | ❌ |
-| M5 | **Hardware encoder path** — detect/prefer nvav1enc/qsv/vaapi before falling back to software | ❌ |
-| M6 | **Allowlist UX + polish** — viewer allowlist management, room-link UX, reconnect handling, source picker, bandwidth/quality indicators | ❌ |
+| M0 | **Signaling proof** — browser host/viewer harness, minimum SDP/ICE relay, STUN only, connection diagnostics (ICE state, candidate type `host`/`srflx`/`relay`, RTT, packet loss, bitrate, FPS, resolution) | ✅ |
+| M1 | **Helper presence and control** — persistent helper WS, authentication + presence (`online`/`offline`), host-browser command API (start, stop, basic source), stub helper, no browser↔localhost calls | ✅ |
+| M2 | **Native AV1 + one viewer** — Windows screen capture, GStreamer → AV1 (hardware encoder preferred, `svtav1enc` fallback), one real-time stream, one WebRTC peer to one Chromium viewer, STUN first, CPU/GPU measured | ❌ |
+| M3 | **TURN as optional host-provided recovery** — STUN first, retry with host-provided TURN when direct ICE fails, clear host-facing error if no TURN is configured, never an implicit GoLive relay | ❌ |
+| M4 | **Encode once, multiple viewers** — single AV1 encoder fanned into one peer connection per viewer (2–3 then ~10), upload/quality impact measured and surfaced | ❌ |
+| M5 | **Permissions and polish** — Discord OAuth identity + room ownership, viewer allowlist, TURN restricted to allowed viewers, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
 
 ## M0 scope checklist
 
-- [x] Git repo + workspace layout
-- [x] Shared protocol/API types (`packages/shared`)
-- [x] Signaling backend (Bun + Hono)
-  - [x] Discord OAuth login/callback/logout/me (+ dev-auth mode when no Discord creds)
-  - [x] Room creation + lookup (case-insensitive short IDs)
-  - [x] WebSocket session signaling: join/leave, SDP + ICE relay, role enforcement (host = room owner, one host per room)
-  - [x] Helper presence WS (hello/status) + `GET /api/helper/status` + `POST /api/helper/command`
-  - [x] `GET /api/ice-servers` (STUN now, TURN when configured)
-  - [x] Static serving of the built web app with SPA fallback
-  - [x] Logger middleware
-- [x] Frontend (Vite + TS SPA)
-  - [x] Hash router: landing / `watch/{roomId}` / host
-  - [x] Login (Discord redirect + dev button), create room, room link copy
-  - [x] Viewer page: joins room, answers host offer, renders AV1-preferred stream
-  - [x] Host page: helper-status gate + browser-emulated test host (proves relay, no native code needed)
-  - [x] Clear error surfaced when the helper/host is absent and no signal arrives
-- [x] Helper stub (Bun script) — presence + control channel only
-- [x] Unit tests for room store + signaling role rules
-- [x] Docs: README, protocol doc, milestones doc, `.env.example`
+Signaling proof — the browser host/viewer harness predates M2's native path, so it stays
+as the test instrument.
+
+- [x] Browser host ⇄ viewer over the relay: SDP offer/answer + ICE candidates, role enforcement (host = room owner, one host per room)
+- [x] Public STUN only (no TURN yet)
+- [x] AV1-preferred codec negotiation; recv-only viewer transceiver
+- [x] Connection diagnostics in the UI — ICE state, selected candidate type (`host`/`srflx` = direct, `relay` = relayed), RTT, packet loss, bitrate, FPS, resolution (viewer page + host test-broadcast card)
+- [x] Host page: helper-status gate + browser-emulated test host; clear errors when no host/helper signal arrives; 60s no-signal prompt
+- [x] Work/legacy already committed while this repo used the older plan (kept as the signaling foundation): monorepo + shared types, Discord OAuth + dev-auth fallback, rooms, WebSocket relay, helper presence/command endpoints, helper stub, unit tests
+
+**Exit condition:** one browser-to-browser stream works reliably on direct connectivity,
+and the UI can distinguish a direct (`host`/`srflx`) path from a relayed (`relay`) path. ✅
 
 ## M1 scope checklist
 
@@ -48,8 +41,26 @@ Trustworthy presence + real command acks through the same relay the native helpe
 - [x] Host page shows helper version + surfaces ack results ("accepted · now live" / "REJECTED — reason")
 - [x] Unit tests for the registry (handshake, supersede, staleness, ack join, rejected ack, rogue conn)
 
+**Exit condition:** the host browser can detect the helper and send commands to it end to
+end through the backend. ✅
+
+## M2 scope checklist (next)
+
+Native AV1 + one viewer. See `docs/m2-helper.md` for the design notes.
+
+- [ ] Helper media signaling rides the persistent `/ws/helper` channel (room attach + SDP/ICE relay)
+- [ ] Rust helper binary: WS connection (cookie auth, hello, ping/status, reconnect/backoff, command acks)
+- [ ] GStreamer pipeline: Windows screen capture → `videoconvert`/`videorate` → AV1 (hardware preferred, `svtav1enc` fallback) → RTP → one `webrtcbin` peer
+- [ ] STUN first (no TURN required for the test)
+- [ ] Measure CPU/GPU during the stream
+- [ ] E2E: backend + helper + one Chromium viewer receives a stable live stream
+
+**Exit condition:** the native helper captures the desktop, encodes AV1 once, and one
+Chromium viewer receives a stable live stream.
+
 ## Notes for later milestones
 
-- Signaling state lives in memory (single process). Multi-process/durable storage is deferred until it's actually needed (M6+).
+- Signaling state lives in memory (single process). Multi-process/durable storage is deferred until it's actually needed (M5+).
 - Session store is also in-memory; rotate to signed stateless cookies or a DB when deploying multi-process.
-- The browser-emulated host in host page is a *test* instrument, not a product path — real host is the native helper (M3+).
+- The browser-emulated host is a *test* instrument, not a product path — the real host is the native helper (M2+).
+- TURN (M3) is optional STUN-first recovery only; there is never a GoLive/shared TURN fallback (see `project.md` §4.3).

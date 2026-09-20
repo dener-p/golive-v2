@@ -24,6 +24,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   // --- state -------------------------------------------------------------
   let roomId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let testStatsTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   /** Command id we most recently sent; used to report its ack (or staleness). */
   let lastSentId: string | null = null;
@@ -45,6 +46,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   const cleanup = (): void => {
     disposed = true;
     if (pollTimer) clearInterval(pollTimer);
+    if (testStatsTimer) clearInterval(testStatsTimer);
     test.cleanup();
   };
   window.addEventListener('pagehide', cleanup);
@@ -108,6 +110,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         <div class="statusline muted" id="test-status">${
           roomId ? '' : 'Create or enter a room id to enable the test host.'
         }</div>
+        <div class="statusline mono muted" id="test-stats" hidden></div>
       </div>
     `;
 
@@ -155,6 +158,25 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       if (roomId && test.stream) void test.start(roomId);
     });
     root.querySelector('#test-stop')?.addEventListener('click', () => test.stop());
+
+    // test-host diagnostics (while a test broadcast is running)
+    if (testStatsTimer) clearInterval(testStatsTimer);
+    testStatsTimer = setInterval(() => void refreshTestStats(), 2000);
+  };
+
+  const refreshTestStats = async (): Promise<void> => {
+    const el = qs(root, '#test-stats');
+    if (!el || disposed) return;
+    if (!test.running) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    const lines = await test.diagnostics();
+    if (lines.length > 0) {
+      el.textContent = lines.join('\n');
+      el.hidden = false;
+    }
   };
 
   const setRoomCreator = (): void => {
