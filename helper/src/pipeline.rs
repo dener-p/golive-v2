@@ -15,7 +15,6 @@
 //! connected viewer without re-encoding.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
@@ -37,7 +36,6 @@ pub struct ViewerContext {
 pub struct ViewerEntry {
     pub webrtcbin: gstreamer::Element,
     pub ctx: Arc<Mutex<ViewerContext>>,
-    pub negotiation_pending: Arc<AtomicBool>,
     /// Tee source pad name (e.g. "src_0") so we can unlink on removal.
     pub tee_pad_name: String,
 }
@@ -154,9 +152,14 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .add(&webrtcbin)
         .context("cannot add webrtcbin to pipeline")?;
 
+    // webrtcbin uses request pads (sink_%u), not a static "sink".
+    // Request one and link it to the tee src pad.
+    let webrtcbin_sink_template = webrtcbin
+        .pad_template("sink_%u")
+        .context("webrtcbin has no sink_%u pad template")?;
     let webrtcbin_sink = webrtcbin
-        .static_pad("sink")
-        .context("webrtcbin has no sink pad")?;
+        .request_pad(&webrtcbin_sink_template, None, None)
+        .context("could not request webrtcbin sink pad")?;
 
     tee_src_pad
         .link(&webrtcbin_sink)
@@ -172,16 +175,8 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         room_id: String::new(), // filled in after attach-ack
         peer_id: peer_id.to_string(),
     }));
-    let negotiation_pending = Arc::new(AtomicBool::new(false));
 
     // --- webrtcbin signals (per-viewer) ---------------------------------------
-    let pending_clone = negotiation_pending.clone();
-    webrtcbin.connect("on-negotiation-needed", false, move |_values| {
-        info!("webrtcbin requests negotiation for viewer");
-        pending_clone.store(true, Ordering::SeqCst);
-        None
-    });
-
     let ctx_ice = ctx.clone();
     let out_ice = session.out.clone();
     webrtcbin.connect("on-ice-candidate", false, move |values| {
@@ -207,7 +202,23 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
     });
 
     // --- pre-push AV1 caps so negotiation isn't blocked on first frame ---------
-    pre_push_caps(session, &webrtcbin);
+    // NOTE: webrtcbin creates sink_%u pads lazily after the pipeline reaches
+    // PLAYING.  If the pad doesn't exist yet, skip the pre-push — the first
+    // encoded frame will carry the caps anyway.
+    {
+        let mut has_sink = false;
+        for pad in webrtcbin.pads() {
+            if pad.name().starts_with("sink_") {
+                has_sink = true;
+                break;
+            }
+        }
+        if has_sink {
+            pre_push_caps(session, &webrtcbin);
+        } else {
+            info!("webrtcbin sink pad not yet created — skipping pre-push caps for viewer {peer_id}");
+        }
+    }
 
     info!("added viewer {peer_id} (tee pad {pad_name})");
 
@@ -216,10 +227,27 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         ViewerEntry {
             webrtcbin,
             ctx,
-            negotiation_pending,
             tee_pad_name: pad_name,
         },
     );
+
+    // Create the offer immediately rather than waiting for on-negotiation-needed.
+    // With a dynamic webrtcbin linked to a tee, the signal may not fire reliably.
+    // We need the room_id to be set first — if it's not yet, poll_negotiations
+    // will pick it up later.
+    {
+        let ctx_clone = session.viewers.get(peer_id).unwrap().ctx.clone();
+        let room_id = ctx_clone.lock().unwrap().room_id.clone();
+        if !room_id.is_empty() {
+            if let Err(e) = create_offer_for_viewer(session, peer_id) {
+                warn!("initial create offer failed for {peer_id}: {e}");
+            } else {
+                info!("immediately created offer for viewer {peer_id}");
+            }
+        }
+        // If room_id was empty, poll_negotiations will create the offer once
+        // set_viewer_room is called.
+    }
 
     Ok(())
 }

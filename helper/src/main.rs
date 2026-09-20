@@ -16,7 +16,6 @@ mod ws;
 
 use std::collections::HashMap;
 use std::env;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -398,30 +397,26 @@ impl App {
         }
     }
 
-    /// Check all viewers for pending webrtcbin negotiations and create offers.
+    /// Check all viewers that haven't received an offer yet and create one.
     fn poll_negotiations(&mut self) {
         let Some(session) = &self.session else {
             return;
         };
 
         // Collect viewer peer_ids that need an offer.
-        let pending: Vec<String> = session
+        let need_offer: Vec<String> = session
             .viewers
-            .iter()
-            .filter(|(_, entry)| {
-                entry.negotiation_pending.load(Ordering::SeqCst)
+            .keys()
+            .filter(|pid| {
+                self.viewers
+                    .get(pid.as_str())
+                    .map(|vs| !vs.offer_sent)
+                    .unwrap_or(false)
             })
-            .map(|(pid, _)| pid.clone())
+            .cloned()
             .collect();
 
-        for peer_id in pending {
-            // Check if we already sent an offer or haven't set room_id yet.
-            if let Some(vs) = self.viewers.get(&peer_id) {
-                if vs.offer_sent {
-                    continue;
-                }
-            }
-
+        for peer_id in need_offer {
             // Check that room_id is set.
             let has_room = session
                 .viewers
@@ -433,7 +428,6 @@ impl App {
                 .unwrap_or(false);
 
             if !has_room {
-                // Diagnostics: log that we're waiting.
                 self.last_neg_debug = self.last_neg_debug.wrapping_add(1);
                 if self.last_neg_debug % 500 == 1 {
                     info!(
@@ -447,12 +441,6 @@ impl App {
                 Ok(()) => {
                     if let Some(vs) = self.viewers.get_mut(&peer_id) {
                         vs.offer_sent = true;
-                    }
-                    // Reset the negotiation flag.
-                    if let Some(entry) = session.viewers.get(&peer_id) {
-                        entry
-                            .negotiation_pending
-                            .store(false, Ordering::SeqCst);
                     }
                     info!("offer created for viewer {peer_id}");
                 }
