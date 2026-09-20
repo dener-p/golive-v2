@@ -97,6 +97,23 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       </div>
 
       <div class="card">
+        <h2>Viewer allowlist</h2>
+        <p class="muted">
+          When the allowlist is empty, anyone with the link can watch.
+          Add viewer IDs to restrict access.
+        </p>
+        <div class="row" style="margin-bottom:8px">
+          <input id="allowlist-input" type="text" placeholder="viewer user id" class="grow" />
+          <button id="allowlist-add" class="primary" ${roomId ? '' : 'disabled'}>Add</button>
+        </div>
+        <div id="allowlist-list" class="muted" style="margin-bottom:8px"></div>
+        <div class="row">
+          <button id="allowlist-clear" ${roomId ? '' : 'disabled'}>Clear allowlist (open room)</button>
+          <span class="statusline muted" id="allowlist-status"></span>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>TURN configuration (optional)</h2>
         <p class="muted">
           If STUN cannot establish a direct connection, viewers will need a TURN server.
@@ -170,6 +187,73 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     root.querySelector('#cmd-start')?.addEventListener('click', () => void sendCommand('start'));
     root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
 
+    // Allowlist management
+    const refreshAllowlist = async (): Promise<void> => {
+      if (!roomId) return;
+      const listEl = root.querySelector('#allowlist-list');
+      if (!listEl) return;
+      try {
+        const { allowlist, open } = await api.getAllowlist(roomId);
+        if (open) {
+          listEl.textContent = 'Room is open — anyone with the link can watch.';
+        } else if (allowlist.length === 0) {
+          listEl.textContent = 'Allowlist is empty — no viewers allowed.';
+        } else {
+          listEl.innerHTML = allowlist
+            .map(
+              (id) =>
+                `<span class="badge ok" style="margin:2px">${id} <button class="small allowlist-remove" data-id="${id}">&times;</button></span>`,
+            )
+            .join(' ');
+          listEl.querySelectorAll('.allowlist-remove').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const vid = (btn as HTMLElement).dataset.id!;
+              if (roomId) await api.removeFromAllowlist(roomId, vid);
+              void refreshAllowlist();
+            });
+          });
+        }
+      } catch {
+        listEl.textContent = 'Failed to load allowlist.';
+      }
+    };
+
+    root.querySelector('#allowlist-add')?.addEventListener('click', async () => {
+      if (!roomId) return;
+      const input = root.querySelector('#allowlist-input') as HTMLInputElement | null;
+      const status = qs(root, '#allowlist-status');
+      const viewerId = input?.value.trim();
+      if (!viewerId) {
+        status.textContent = 'Enter a viewer ID.';
+        status.className = 'statusline error';
+        return;
+      }
+      try {
+        await api.addToAllowlist(roomId, viewerId);
+        if (input) input.value = '';
+        status.textContent = `Added ${viewerId}.`;
+        status.className = 'statusline ok';
+        void refreshAllowlist();
+      } catch (err) {
+        status.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+        status.className = 'statusline error';
+      }
+    });
+
+    root.querySelector('#allowlist-clear')?.addEventListener('click', async () => {
+      if (!roomId) return;
+      const status = qs(root, '#allowlist-status');
+      try {
+        await api.clearAllowlist(roomId);
+        status.textContent = 'Allowlist cleared — room is now open.';
+        status.className = 'statusline ok';
+        void refreshAllowlist();
+      } catch (err) {
+        status.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+        status.className = 'statusline error';
+      }
+    });
+
     // TURN config
     root.querySelector('#turn-save')?.addEventListener('click', async () => {
       if (!roomId) return;
@@ -232,6 +316,9 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     // test-host diagnostics (while a test broadcast is running)
     if (testStatsTimer) clearInterval(testStatsTimer);
     testStatsTimer = setInterval(() => void refreshTestStats(), 2000);
+
+    // Load allowlist if we're in a room
+    if (roomId) void refreshAllowlist();
   };
 
   const refreshTestStats = async (): Promise<void> => {

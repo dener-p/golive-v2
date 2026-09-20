@@ -16,6 +16,8 @@ export interface Room {
   hostName: string;
   createdAt: string;
   turn?: TurnConfig;
+  /** Viewer allowlist. Empty = open room (anyone can join). */
+  allowlist: Set<string>;
 }
 
 const rooms = new Map<string, Room>();
@@ -39,6 +41,7 @@ export function createRoom(user: PublicUser): Room {
     hostId: user.id,
     hostName: user.username,
     createdAt: new Date().toISOString(),
+    allowlist: new Set(),
   };
   rooms.set(room.roomId, room);
   return room;
@@ -70,4 +73,46 @@ export function setRoomTurn(roomId: string, turn: TurnConfig | null): boolean {
 
 export function getRoomTurn(roomId: string): TurnConfig | undefined {
   return rooms.get(roomId.trim().toLowerCase())?.turn;
+}
+
+// ---------------------------------------------------------------------------
+// Viewer allowlist
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a viewer is allowed to join a room.
+ * Returns true if: the room has no allowlist (open) OR the viewer is in it.
+ */
+export function isViewerAllowed(roomId: string, viewerId: string): boolean {
+  const room = rooms.get(roomId.trim().toLowerCase());
+  if (!room) return false;
+  if (room.allowlist.size === 0) return true; // open room
+  return room.allowlist.has(viewerId);
+}
+
+export function addToAllowlist(roomId: string, viewerId: string): boolean {
+  const room = rooms.get(roomId.trim().toLowerCase());
+  if (!room) return false;
+  room.allowlist.add(viewerId);
+  return true;
+}
+
+export function removeFromAllowlist(roomId: string, viewerId: string): boolean {
+  const room = rooms.get(roomId.trim().toLowerCase());
+  if (!room) return false;
+  return room.allowlist.delete(viewerId);
+}
+
+export function getAllowlist(roomId: string): string[] {
+  const room = rooms.get(roomId.trim().toLowerCase());
+  if (!room) return [];
+  return [...room.allowlist];
+}
+
+/** Clear the allowlist (makes the room open again). */
+export function clearAllowlist(roomId: string): boolean {
+  const room = rooms.get(roomId.trim().toLowerCase());
+  if (!room) return false;
+  room.allowlist.clear();
+  return true;
 }
