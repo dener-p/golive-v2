@@ -58,10 +58,11 @@ struct App {
     out: UnboundedSender<Client>,
     state: RunState,
     session: Option<pipeline::StreamSession>,
+    /// The room we're currently streaming into (set by `start` command).
+    current_room: Option<String>,
     /// Per-viewer negotiation state keyed by peer_id.
     viewers: HashMap<String, ViewerState>,
     shutdown: bool,
-    last_neg_debug: u64,
 }
 
 fn main() -> Result<()> {
@@ -147,9 +148,9 @@ fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client
         out,
         state: RunState::Idle,
         session: None,
+        current_room: None,
         viewers: HashMap::new(),
         shutdown: false,
-        last_neg_debug: 0,
     };
 
     loop {
@@ -325,6 +326,7 @@ impl App {
         }
         match pipeline::build(self.out.clone()) {
             Ok(session) => {
+                self.current_room = Some(room_id.to_string());
                 // Set room on any viewers that were queued before stream start.
                 for pid in self.viewers.keys().cloned().collect::<Vec<_>>() {
                     pipeline::set_viewer_room(&session, &pid, room_id);
@@ -348,6 +350,7 @@ impl App {
         if let Some(session) = self.session.take() {
             let _ = pipeline::stop(&session);
             self.state = RunState::Idle;
+            self.current_room = None;
             self.viewers.clear();
             let _ = self.out.send(Client::DetachRoom);
             info!("stream stopped");
@@ -360,24 +363,14 @@ impl App {
         self.viewers
             .insert(peer_id.to_string(), ViewerState { offer_sent: false });
 
-        // Try to get the known room_id from an existing viewer before mutating.
-        let known_room: Option<String> = self.session.as_ref().and_then(|s| {
-            s.viewers
-                .values()
-                .next()
-                .and_then(|v| {
-                    let c = v.ctx.lock().ok()?;
-                    if c.room_id.is_empty() { None } else { Some(c.room_id.clone()) }
-                })
-        });
-
         if let Some(ref mut s) = self.session {
             if let Err(e) = pipeline::add_viewer(s, peer_id) {
                 error!("failed to add viewer {peer_id}: {e}");
                 self.viewers.remove(peer_id);
                 return;
             }
-            if let Some(room_id) = &known_room {
+            // Use the room_id we stored when start was called.
+            if let Some(room_id) = &self.current_room {
                 pipeline::set_viewer_room(s, peer_id, room_id);
             }
             info!(
@@ -405,6 +398,11 @@ impl App {
             return;
         };
 
+        let room_id = match &self.current_room {
+            Some(r) => r.clone(),
+            None => return,
+        };
+
         // Collect viewer peer_ids that need an offer.
         let need_offer: Vec<String> = session
             .viewers
@@ -419,25 +417,8 @@ impl App {
             .collect();
 
         for peer_id in need_offer {
-            // Check that room_id is set.
-            let has_room = session
-                .viewers
-                .get(&peer_id)
-                .map(|e| {
-                    let c = e.ctx.lock().unwrap();
-                    !c.room_id.is_empty()
-                })
-                .unwrap_or(false);
-
-            if !has_room {
-                self.last_neg_debug = self.last_neg_debug.wrapping_add(1);
-                if self.last_neg_debug % 500 == 1 {
-                    info!(
-                        "waiting for room_id before creating offer for viewer {peer_id}"
-                    );
-                }
-                continue;
-            }
+            // Ensure room_id is set on the viewer context.
+            pipeline::set_viewer_room(session, &peer_id, &room_id);
 
             match pipeline::create_offer_for_viewer(session, &peer_id) {
                 Ok(()) => {
