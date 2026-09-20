@@ -8,7 +8,7 @@
  * Usage: bun run helper:stub   (server must be in dev-auth mode, or pass a
  * real session cookie via SESSION_COOKIE env — e.g. from a browser login).
  */
-import type { HelperMessage, ServerHelperMessage } from '@golive/shared';
+import type { HelperMessage, HelperState, ServerHelperMessage } from '@golive/shared';
 
 const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:8787').replace(/\/+$/, '');
 const WS_URL = BASE_URL.replace(/^http/, 'ws');
@@ -76,10 +76,16 @@ function connect(): void {
 
 function handleCommand(msg: ServerHelperMessage & { type: 'command' }): void {
   log(`command received: "${msg.command}"${msg.payload ? ` ${JSON.stringify(msg.payload)}` : ''}`);
-  const state: HelperMessage['state'] = msg.command === 'start' ? 'live' : 'idle';
-  const status: HelperMessage = { type: 'status', state, detail: `stub handled "${msg.command}"` };
-  ws?.send(JSON.stringify(status));
-  log(`reported status -> ${state}`);
+  const state: HelperState = msg.command === 'start' ? 'live' : 'idle';
+  const ack: HelperMessage = {
+    type: 'ack',
+    id: msg.id,
+    ok: true,
+    state,
+    detail: `stub handled "${msg.command}"`,
+  };
+  ws?.send(JSON.stringify(ack));
+  log(`acked "${msg.command}" -> ${state}`);
 }
 
 function scheduleReconnect(): void {

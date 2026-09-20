@@ -25,6 +25,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   let roomId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
+  /** Command id we most recently sent; used to report its ack (or staleness). */
+  let lastSentId: string | null = null;
 
   const test = new TestHost((text, kind) => {
     if (disposed) return;
@@ -77,11 +79,12 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         <h2>Native helper</h2>
         <div class="row">
           <span id="helper-badge" class="badge warn">checking…</span>
+          <span id="helper-version" class="muted"></span>
           <span class="muted" id="helper-last-seen"></span>
         </div>
         <p class="muted">
           Run <code>bun run helper:stub</code> to simulate the native helper. It connects outbound
-          to the backend and reports presence — the browser never talks to it directly.
+          to the backend, reports presence, and acks commands — the browser never talks to it directly.
         </p>
         <div class="row">
           <button id="cmd-start" class="primary" disabled>Start live</button>
@@ -179,24 +182,39 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     try {
       const { status } = await api.helperStatus();
       const badge = root.querySelector('#helper-badge');
+      const version = root.querySelector('#helper-version');
       const seen = root.querySelector('#helper-last-seen');
+      const out = root.querySelector('#command-result') as HTMLElement | null;
       const startBtn = root.querySelector('#cmd-start') as HTMLButtonElement | null;
       const stopBtn = root.querySelector('#cmd-stop') as HTMLButtonElement | null;
       if (!badge || !seen) return;
       if (status.connected) {
         badge.textContent = `helper connected · ${status.state ?? 'idle'}`;
         badge.className = 'badge ok';
-        seen.textContent = status.lastSeenAt
-          ? `last seen ${new Date(status.lastSeenAt).toLocaleTimeString()}`
-          : '';
+        if (version) version.textContent = status.helperVersion ? String(status.helperVersion) : '';
+        seen.textContent = `last seen ${new Date(status.lastSeenAt!).toLocaleTimeString()}`;
         if (startBtn) startBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = false;
       } else {
         badge.textContent = 'helper offline';
         badge.className = 'badge warn';
+        if (version) version.textContent = '';
         seen.textContent = '';
         if (startBtn) startBtn.disabled = true;
         if (stopBtn) stopBtn.disabled = true;
+      }
+
+      // Report the ack for the command we sent (or the latest one from this helper).
+      const last = status.lastCommand;
+      if (last && (!lastSentId || last.id === lastSentId) && out) {
+        if (last.ok) {
+          out.textContent = `"${last.command}" accepted by helper${last.state ? ` · now ${last.state}` : ''} @ ${new Date(last.at).toLocaleTimeString()}`;
+          out.className = 'statusline ok';
+        } else {
+          out.textContent = `"${last.command}" REJECTED by helper${last.detail ? ` — ${last.detail}` : ''}`;
+          out.className = 'statusline error';
+        }
+        if (lastSentId === last.id) lastSentId = null;
       }
     } catch {
       /* transient */
@@ -208,10 +226,14 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     if (!out) return;
     try {
       const res = await api.helperCommand(command);
-      out.textContent = res.delivered
-        ? `Command "${command}" relayed to helper.`
-        : `Command "${command}" NOT delivered — helper offline.`;
-      out.className = res.delivered ? 'statusline ok' : 'statusline error';
+      if (!res.delivered) {
+        out.textContent = `Command "${command}" NOT delivered — helper offline.`;
+        out.className = 'statusline error';
+        return;
+      }
+      lastSentId = res.id ?? null;
+      out.textContent = `Command "${command}" relayed — awaiting helper ack…`;
+      out.className = 'statusline';
     } catch (err) {
       out.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
       out.className = 'statusline error';

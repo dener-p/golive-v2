@@ -37,6 +37,8 @@ export interface MetaInfo {
 export interface HelperCommandResult {
   delivered: boolean;
   reason?: string;
+  /** Command id; the helper echoes it in its ack (surfaced via helper status). */
+  id?: string;
 }
 
 export const api = {

@@ -14,7 +14,19 @@ import {
   leaveSignaling,
   type SignalingSocket,
 } from './signaling';
-import { registerHelper, unregisterHelper, updateHelperState, type SocketLike } from './helperRegistry';
+import {
+  registerHelper,
+  unregisterHelper,
+  updateHelperState,
+  touchHelper,
+  pendHelper,
+  clearPending,
+  handleHelperAck,
+  pingHelpers,
+  sweepStaleHelpers,
+  HELPER_PING_INTERVAL_MS,
+  type SocketLike,
+} from './helperRegistry';
 
 const app = new Hono();
 app.use(logger());
@@ -94,6 +106,8 @@ app.get(
   upgradeWebSocket((c) => {
     const user = userFromCookieHeader(c.req.header('cookie'));
     const connId = crypto.randomUUID();
+    /** Presence only counts once a valid `hello` handshake completes. */
+    let registered = false;
 
     return {
       onOpen(_evt, ws) {
@@ -101,9 +115,7 @@ app.get(
           ws.close(1008, 'unauthorized');
           return;
         }
-        registerHelper({ userId: user.id, connId, conn: ws, state: 'idle', lastSeenAt: Date.now() });
-        const ack: ServerHelperMessage = { type: 'hello-ack', serverTime: new Date().toISOString() };
-        ws.send(JSON.stringify(ack));
+        pendHelper(user.id, connId, ws);
       },
       onMessage(evt, ws) {
         if (!user) return;
@@ -113,15 +125,47 @@ app.get(
         } catch {
           return;
         }
+
         if (msg.type === 'hello') {
+          const version = (msg.version ?? '').trim();
+          if (!version || version.length > 64) {
+            ws.close(1008, 'bad_hello');
+            return;
+          }
+          if (!registered) {
+            registered = true;
+            registerHelper({
+              userId: user.id,
+              connId,
+              conn: ws,
+              state: 'idle',
+              version,
+              lastSeenAt: Date.now(),
+            });
+          }
           const ack: ServerHelperMessage = { type: 'hello-ack', serverTime: new Date().toISOString() };
           ws.send(JSON.stringify(ack));
-        } else if (msg.type === 'status') {
+          return;
+        }
+
+        // Anything after the handshake must have been preceded by `hello`.
+        if (!registered) {
+          ws.close(1008, 'hello_required');
+          return;
+        }
+
+        touchHelper(user.id, connId);
+        if (msg.type === 'status') {
           updateHelperState(user.id, connId, msg.state, msg.detail);
+        } else if (msg.type === 'ack') {
+          handleHelperAck(user.id, connId, msg);
         }
       },
       onClose() {
-        if (user) unregisterHelper(user.id, connId);
+        if (user) {
+          clearPending(connId);
+          if (registered) unregisterHelper(user.id, connId);
+        }
       },
     };
   }),
@@ -167,6 +211,15 @@ app.notFound(async (c) => {
   if (await index.exists()) return new Response(index, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   return c.text('golive signaling server is running. Run `bun run build` to serve the web app.');
 });
+
+// ---------------------------------------------------------------------------
+// Helper heartbeat: ping every interval; drop helpers that miss enough frames.
+// ---------------------------------------------------------------------------
+
+setInterval(() => {
+  pingHelpers();
+  sweepStaleHelpers();
+}, HELPER_PING_INTERVAL_MS);
 
 // ---------------------------------------------------------------------------
 

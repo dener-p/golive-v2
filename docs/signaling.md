@@ -28,8 +28,8 @@ and reads `Set-Cookie`.
 | `POST` | `/api/rooms` | session | `{}` | `201 { room: RoomInfo }` |
 | `GET` | `/api/rooms/{roomId}` | session | – | `{ room: RoomInfo }` or 404 |
 | `GET` | `/api/ice-servers` | session | – | `{ iceServers: RTCIceServer[] }` |
-| `GET` | `/api/helper/status` | session | – | `{ status: HelperStatus }` |
-| `POST` | `/api/helper/command` | session | `{ command, payload? }` | `{ delivered }`; 409 if helper offline |
+| `GET` | `/api/helper/status` | session | – | `{ status: HelperStatus }` including `helperVersion` + `lastCommand` |
+| `POST` | `/api/helper/command` | session | `{ command, payload? }` | `{ delivered, id }`; 409 if helper offline |
 
 ## Room signaling messages (`/ws`)
 
@@ -56,11 +56,30 @@ Server → client:
 
 | Dir | Message | Payload |
 | --- | --- | --- |
-| C→S | `hello` | `{ version }` – presence registration (login cookie = host account) |
-| C→S | `status` | `{ state: idle\|live\|error, detail? }` |
+| S→C | (on connect) | socket must send `hello` within 10s or the server closes it with `hello_timeout` |
+| C→S | `hello` | `{ version }` – required handshake; presence registers only after this (bad/missing version → `bad_hello`; messages before `hello` → `hello_required`) |
+| C→S | `status` | `{ state: idle\|live\|error, detail? }` – also refreshes the heartbeat clock |
+| C→S | `ack` | `{ id, ok, state?, detail? }` – per-command acknowledgement, echoing the `id` from the server's `command` |
 | S→C | `hello-ack` | `{ serverTime }` |
-| S→C | `ping` | heartbeat |
+| S→C | `ping` | heartbeat; helpers must keep responding (e.g. `status`) or they're dropped as stale |
 | S→C | `command` | `{ id, command, payload? }` – started from `POST /api/helper/command` |
+
+### Heartbeat & staleness
+
+- The server pings every 10s; the helper should reply with `status` (or any other frame).
+- Any inbound frame refreshes `lastSeenAt`.
+- A helper with no inbound frame for 30s is reported `connected: false` and its
+  socket is closed with `stale`. One helper per account — a reconnecting helper
+  supersedes the old connection (`superseded`).
+
+### Command ack flow
+
+1. Host browser calls `POST /api/helper/command` → `{ delivered: true, id }`.
+2. Server relays `command { id, command }` to the helper.
+3. Helper replies `ack { id, ok, state?, detail? }`.
+4. Server records the result; `GET /api/helper/status` then includes
+   `lastCommand: { id, command, ok, detail?, state?, at }` joined by id.
+   Commands are rejected with `400 command_too_long` over 64 chars.
 
 ## Flow: viewer receives a stream
 

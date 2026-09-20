@@ -28,10 +28,23 @@ export interface RoomInfo {
 
 export type HelperState = 'idle' | 'live' | 'error';
 
+/** Result of the most recent host→helper command, as acked by the helper. */
+export interface LastCommandResult {
+  id: string;
+  command: string;
+  ok: boolean;
+  detail?: string;
+  state?: HelperState;
+  at: string;
+}
+
 export interface HelperStatus {
   connected: boolean;
   lastSeenAt: string | null;
   state: HelperState | null;
+  /** Version string from the helper's `hello` handshake. */
+  helperVersion?: string | null;
+  lastCommand?: LastCommandResult | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +114,15 @@ export type ServerErrorCode =
 
 export type HelperMessage =
   | { type: 'hello'; version: string }
-  | { type: 'status'; state: HelperState; detail?: string };
+  | { type: 'status'; state: HelperState; detail?: string }
+  | {
+      /** Per-command acknowledgement, keyed by the `id` from `ServerHelperMessage.command`. */
+      type: 'ack';
+      id: string;
+      ok: boolean;
+      state?: HelperState;
+      detail?: string;
+    };
 
 export type ServerHelperMessage =
   | { type: 'hello-ack'; serverTime: string }

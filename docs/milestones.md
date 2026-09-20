@@ -4,8 +4,8 @@ Derived from the build order in `project.md` §5. M0 is what this repo ships tod
 
 | # | Deliverable | Status |
 | --- | --- | --- |
-| M0 | **Repo + shared signaling skeleton** — monorepo, Discord OAuth (dev fallback), room create/lookup, WebSocket SDP/ICE relay, browser-emulated host/viewer test page, helper-presence + command-relay endpoints, stub helper | ✅ (this branch/commit) |
-| M1 | **Control relay end to end** — trustworthy helper presence + host→helper command API exercised by a stub that actually receives/acks commands | ❌ |
+| M0 | **Repo + shared signaling skeleton** — monorepo, Discord OAuth (dev fallback), room create/lookup, WebSocket SDP/ICE relay, browser-emulated host/viewer test page, helper-presence + command-relay endpoints, stub helper | ✅ |
+| M1 | **Control relay end to end** — trustworthy helper presence + host→helper command API exercised by a stub that actually receives/acks commands | ✅ |
 | M2 | **Credential API + TURN** — per-host credential API (Cloudflare TURN creds or coturn) issuing short-lived creds gated by viewer allowlist; `IceServers` endpoint returns TURN | ❌ |
 | M3 | **Native helper MVP** — capture + software AV1 encode (svtav1enc) + one peer connection, driven by real commands relayed through the backend | ❌ |
 | M4 | **Multi-viewer fan-out** — `tee` one encode into N peer connections, measure upload bandwidth vs viewer count (~10 target) | ❌ |
@@ -33,6 +33,20 @@ Derived from the build order in `project.md` §5. M0 is what this repo ships tod
 - [x] Helper stub (Bun script) — presence + control channel only
 - [x] Unit tests for room store + signaling role rules
 - [x] Docs: README, protocol doc, milestones doc, `.env.example`
+
+## M1 scope checklist
+
+Trustworthy presence + real command acks through the same relay the native helper will use.
+
+- [x] Presence requires a `hello` handshake (version carried) — pending conns that don't hello within 10s are closed (`hello_timeout`); frames before hello → `hello_required`
+- [x] Server heartbeat: `ping` every 10s; helpers must send frames; stale helpers (>30s silent) reported offline and dropped (`stale`)
+- [x] One helper per account, last-wins: reconnecting helper supersedes and closes the old connection (`superseded`)
+- [x] `ack { id, ok, state?, detail? }` message — helper echoes the command id
+- [x] Server records lastCommand result (joined by id) and exposes it via `GET /api/helper/status` (`lastCommand`, `helperVersion`)
+- [x] `POST /api/helper/command` returns `{ delivered, id }`; 64-char command length guard
+- [x] Helper stub acks every command (start → live, stop → idle) and answers pings with status
+- [x] Host page shows helper version + surfaces ack results ("accepted · now live" / "REJECTED — reason")
+- [x] Unit tests for the registry (handshake, supersede, staleness, ack join, rejected ack, rogue conn)
 
 ## Notes for later milestones
 

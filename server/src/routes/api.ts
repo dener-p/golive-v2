@@ -37,8 +37,10 @@ apiApp.post('/helper/command', async (c) => {
   if (typeof command !== 'string' || !command.trim()) {
     return c.json({ error: 'missing_command' }, 400);
   }
+  const trimmed = command.trim();
+  if (trimmed.length > 64) return c.json({ error: 'command_too_long' }, 400);
 
-  const delivered = sendCommand(user.id, command.trim(), payload);
-  if (!delivered) return c.json({ delivered: false, reason: 'helper_offline' }, 409);
-  return c.json({ delivered: true });
+  const delivered = sendCommand(user.id, trimmed, payload);
+  if (!delivered.delivered) return c.json({ delivered: false, reason: 'helper_offline' }, 409);
+  return c.json({ delivered: true, id: delivered.id });
 });
