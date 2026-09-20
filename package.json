@@ -1,0 +1,29 @@
+{
+  "name": "golive",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*",
+    "server",
+    "web",
+    "helper-stub"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"bun run dev:server\" \"bun run dev:web\"",
+    "dev:server": "bun run --cwd server dev",
+    "dev:web": "bun run --cwd web dev",
+    "build": "bun run build:web",
+    "build:web": "bun run --cwd web build",
+    "typecheck": "bun run typecheck:shared && bun run typecheck:server && bun run typecheck:web",
+    "typecheck:shared": "bun run --cwd packages/shared typecheck",
+    "typecheck:server": "bun run --cwd server typecheck",
+    "typecheck:web": "bun run --cwd web typecheck",
+    "test": "bun test --cwd server",
+    "start": "bun run --cwd server start",
+    "helper:stub": "bun run --cwd helper-stub start",
+    "git:init": "git init"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

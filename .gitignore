@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+web/dist/
+dist/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Bun
+bun.lockb
