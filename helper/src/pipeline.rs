@@ -41,6 +41,9 @@ pub struct ViewerEntry {
     /// works reliably.
     pub queue: gstreamer::Element,
     pub ctx: Arc<Mutex<ViewerContext>>,
+    /// Offer waiting to be applied via set-local-description.
+    /// Created by create-offer, applied on the next poll_negotiations tick.
+    pub pending_offer: Arc<Mutex<Option<gstreamer_webrtc::WebRTCSessionDescription>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +228,7 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
             webrtcbin,
             queue,
             ctx,
+            pending_offer: Arc::new(Mutex::new(None)),
         },
     );
 
@@ -278,6 +282,8 @@ pub fn remove_viewer(session: &mut StreamSession, peer_id: &str) {
 // ---------------------------------------------------------------------------
 
 /// Create an offer for a specific viewer and ship it to the room.
+/// The offer is stored in `pending_offer` and will be applied via
+/// `set-local-description` on the next `apply_pending_offers` call.
 pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result<()> {
     let entry = session
         .viewers
@@ -293,7 +299,7 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
     }
 
     let out = session.out.clone();
-    let webrtcbin = entry.webrtcbin.clone();
+    let pending = entry.pending_offer.clone();
 
     let promise = gstreamer::Promise::with_change_func(move |res| {
         let reply = match res {
@@ -314,18 +320,13 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
                 return;
             }
         };
-        let sdp_obj = offer.sdp();
-        let text = sdp_obj.to_string();
-        info!("offer ready for viewer {viewer_peer_id}");
-        let vp_id = viewer_peer_id.clone();
-        let set_local_promise = gstreamer::Promise::with_change_func(move |res| {
-            match res {
-                Ok(Some(_)) => info!("set-local-description succeeded for viewer {vp_id}"),
-                Ok(None) => warn!("set-local-description promise cancelled for viewer {vp_id}"),
-                Err(e) => warn!("set-local-description failed for viewer {vp_id}: {e:?}"),
-            }
-        });
-        let _ = webrtcbin.emit_by_name::<()>("set-local-description", &[&offer, &set_local_promise]);
+        let text = offer.sdp().to_string();
+        info!("offer ready for viewer {viewer_peer_id} — storing for deferred set-local-description");
+
+        // Store the offer so apply_pending_offers can call set-local-description
+        // from the main loop (avoiding reentrancy inside the create-offer callback).
+        *pending.lock().unwrap() = Some(offer);
+
         let _ = out.send(Client::RoomSdp {
             room_id,
             peer_id: viewer_peer_id,
@@ -341,6 +342,27 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
         .webrtcbin
         .emit_by_name::<()>("create-offer", &[&options, &promise]);
     Ok(())
+}
+
+/// Apply any pending offers via set-local-description.
+/// Called from poll_negotiations on the main loop tick.
+pub fn apply_pending_offers(session: &StreamSession) {
+    for (peer_id, entry) in &session.viewers {
+        let offer = entry.pending_offer.lock().unwrap().take();
+        let Some(offer) = offer else { continue };
+
+        info!("applying set-local-description for viewer {peer_id}");
+        let webrtcbin = entry.webrtcbin.clone();
+        let vp_id = peer_id.clone();
+        let promise = gstreamer::Promise::with_change_func(move |res| {
+            match res {
+                Ok(Some(_)) => info!("set-local-description OK for viewer {vp_id}"),
+                Ok(None) => warn!("set-local-description promise expired for viewer {vp_id}"),
+                Err(e) => warn!("set-local-description error for viewer {vp_id}: {e:?}"),
+            }
+        });
+        webrtcbin.emit_by_name::<()>("set-local-description", &[&offer, &promise]);
+    }
 }
 
 /// Set the room_id on a viewer's context (called after attach-ack).

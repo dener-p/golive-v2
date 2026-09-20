@@ -430,5 +430,10 @@ impl App {
                 Err(e) => warn!("create offer failed for {peer_id}: {e}"),
             }
         }
+
+        // Apply any pending offers (set-local-description) from the previous tick.
+        // This must be called from the main loop, not from inside create-offer's
+        // promise callback, to avoid reentrancy in webrtcbin's state machine.
+        pipeline::apply_pending_offers(session);
     }
 }
