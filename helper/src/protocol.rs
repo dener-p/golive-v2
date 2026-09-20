@@ -26,11 +26,11 @@ pub struct IceCandidate {
 }
 
 impl IceCandidate {
-    pub fn full_candidate(candidate: String) -> Self {
+    pub fn full_candidate(candidate: String, mline: u32) -> Self {
         Self {
             candidate,
-            sdp_mid: Some("0".into()),
-            sdp_mline_index: Some(0),
+            sdp_mid: Some(format!("video{mline}")),
+            sdp_mline_index: Some(mline),
             username_fragment: None,
         }
     }

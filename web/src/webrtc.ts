@@ -133,7 +133,9 @@ export function preferCodecs(
   const codecs = [...ordered, ...rest];
 
   for (const transceiver of pc.getTransceivers()) {
-    if (transceiver.sender?.track?.kind === kind) {
+    // Use receiver.track.kind — sender.track is null on recvonly transceivers.
+    const trackKind = transceiver.receiver.track.kind;
+    if (trackKind === kind) {
       try {
         transceiver.setCodecPreferences(codecs);
       } catch {

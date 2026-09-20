@@ -80,7 +80,8 @@ pub fn build(out: tokio::sync::mpsc::UnboundedSender<Client>) -> Result<StreamSe
         "! d3d11download ! video/x-raw(memory:SystemMemory) ",
         "! videoconvert ! videorate ! videoscale ",
         "! video/x-raw,width=1280,height=720,framerate=30/1 ",
-        "! svtav1enc preset=12 crf=36 ",
+        "! svtav1enc preset=12 crf=36 intra-period-length=60 parameters-string=\"pred-struct=1\" ",
+        "! av1parse ",
         "! rtpav1pay ",
         "! queue ",
         "! tee name=t"
@@ -162,6 +163,17 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .context("failed to create webrtcbin")?;
     webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
 
+    // Explicitly add an AV1 sendonly transceiver so webrtcbin knows the media format
+    // and direction immediately when creating the SDP offer (before data has flowed
+    // through the dynamic tee/queue).
+    let caps = "application/x-rtp,media=video,encoding-name=AV1,payload=96,clock-rate=90000"
+        .parse::<gstreamer::Caps>()
+        .context("invalid AV1 caps")?;
+    let _trans: Option<gstreamer_webrtc::WebRTCRTPTransceiver> = webrtcbin.emit_by_name(
+        "add-transceiver",
+        &[&gstreamer_webrtc::WebRTCRTPTransceiverDirection::Sendonly, &caps],
+    );
+
     session
         .pipeline
         .add_many([&queue, &webrtcbin])
@@ -225,7 +237,7 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         let _ = out_ice.send(Client::RoomIce {
             room_id,
             peer_id,
-            candidate: IceCandidate::full_candidate(candidate),
+            candidate: IceCandidate::full_candidate(candidate, mline),
         });
         None
     });
@@ -368,8 +380,7 @@ pub fn apply_pending_offers(session: &StreamSession) {
         let pending = entry.pending_promises.clone();
         let promise = gstreamer::Promise::with_change_func(move |res| {
             match res {
-                Ok(Some(_)) => info!("set-local-description OK for viewer {vp_id}"),
-                Ok(None) => warn!("set-local-description promise expired for viewer {vp_id}"),
+                Ok(_) => info!("set-local-description OK for viewer {vp_id}"),
                 Err(e) => warn!("set-local-description error for viewer {vp_id}: {e:?}"),
             }
             // The promise is done for good (resolved/expired/interrupted);
@@ -411,8 +422,7 @@ pub fn set_remote_description_for_viewer(
     let pending = entry.pending_promises.clone();
     let promise = gstreamer::Promise::with_change_func(move |res| {
         match res {
-            Ok(Some(_)) => info!("set-remote-description OK for viewer {vp_id}"),
-            Ok(None) => warn!("set-remote-description promise expired for viewer {vp_id}"),
+            Ok(_) => info!("set-remote-description OK for viewer {vp_id}"),
             Err(e) => warn!("set-remote-description error for viewer {vp_id}: {e:?}"),
         }
         pending.lock().unwrap().clear();
@@ -427,12 +437,13 @@ pub fn set_remote_description_for_viewer(
 pub fn add_remote_candidate_for_viewer(
     session: &StreamSession,
     peer_id: &str,
+    mline: u32,
     candidate: &str,
 ) {
     if let Some(entry) = session.viewers.get(peer_id) {
         entry
             .webrtcbin
-            .emit_by_name::<()>("add-ice-candidate", &[&0u32, &candidate]);
+            .emit_by_name::<()>("add-ice-candidate", &[&mline, &candidate]);
     }
 }
 
@@ -455,3 +466,186 @@ pub fn stop(session: &StreamSession) -> Result<()> {
         .map(|_| ())
         .map_err(|_| anyhow!("could not set pipeline to NULL"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_offer() {
+        gstreamer::init().unwrap();
+        let (out, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session = build(out).expect("build pipeline");
+        play(&session).expect("play pipeline");
+        let peer_id = "test-viewer-1";
+        add_viewer(&mut session, peer_id).expect("add viewer");
+        set_viewer_room(&session, peer_id, "room-123");
+
+        let src_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enc_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pay_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tee_sink_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let sc = src_count.clone();
+        if let Some(src) = session.pipeline.by_name("d3d11screencapturesrc0") {
+            if let Some(pad) = src.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    sc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let dl_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let vconv_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let vrate_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let vscale_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enc_sink_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let dlc = dl_count.clone();
+        if let Some(e) = session.pipeline.by_name("d3d11download0") {
+            if let Some(pad) = e.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    dlc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let vcc = vconv_count.clone();
+        if let Some(e) = session.pipeline.by_name("videoconvert0") {
+            if let Some(pad) = e.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    vcc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let vrc = vrate_count.clone();
+        if let Some(e) = session.pipeline.by_name("videorate0") {
+            if let Some(pad) = e.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    vrc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let vsc = vscale_count.clone();
+        if let Some(e) = session.pipeline.by_name("videoscale0") {
+            if let Some(pad) = e.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    vsc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let esc = enc_sink_count.clone();
+        if let Some(e) = session.pipeline.by_name("svtav1enc0") {
+            if let Some(pad) = e.static_pad("sink") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    esc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let pc = pay_count.clone();
+        if let Some(pay) = session.pipeline.by_name("rtpav1pay0") {
+            if let Some(pad) = pay.static_pad("src") {
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                    pc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+        let tc = tee_sink_count.clone();
+        if let Some(pad) = session.tee.static_pad("sink") {
+            pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_, _| {
+                tc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                gstreamer::PadProbeReturn::Ok
+            });
+        }
+
+        let buffer_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let bc = buffer_count.clone();
+        let entry = session.viewers.get(peer_id).unwrap();
+        let q_sink = entry.queue.static_pad("sink").unwrap();
+        q_sink.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, _info| {
+            bc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            gstreamer::PadProbeReturn::Ok
+        });
+
+        create_offer_for_viewer(&session, peer_id).expect("create offer");
+
+        // Iterate main context to process the promise
+        for _ in 0..100 {
+            gstreamer::glib::MainContext::default().iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // Check if offer was sent
+        let msg = rx.try_recv().expect("should receive SDP offer");
+        match msg {
+            Client::RoomSdp { room_id, peer_id, sdp } => {
+                println!("Got SDP offer for room {room_id}, peer {peer_id}:\n{}", sdp.sdp);
+            }
+            other => panic!("Unexpected message: {other:?}"),
+        }
+
+        apply_pending_offers(&session);
+
+        for _ in 0..100 {
+            gstreamer::glib::MainContext::default().iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // Check for ICE candidates
+        let mut ice_candidates = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let Client::RoomIce { candidate, .. } = &msg {
+                ice_candidates.push(candidate.clone());
+            }
+            println!("Got message from out channel: {msg:?}");
+        }
+        assert!(!ice_candidates.is_empty(), "Should have gathered ICE candidates");
+
+        // Now test setting remote answer
+        let answer_sdp = concat!(
+            "v=0\r\n",
+            "o=- 1234567890 2 IN IP4 127.0.0.1\r\n",
+            "s=-\r\n",
+            "t=0 0\r\n",
+            "a=ice-options:trickle\r\n",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+            "c=IN IP4 0.0.0.0\r\n",
+            "a=setup:active\r\n",
+            "a=ice-ufrag:viewerUfrag1234\r\n",
+            "a=ice-pwd:viewerPassword12345678901234\r\n",
+            "a=rtcp-mux\r\n",
+            "a=rtcp-rsize\r\n",
+            "a=recvonly\r\n",
+            "a=rtpmap:96 AV1/90000\r\n",
+            "a=mid:video0\r\n",
+            "a=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\n"
+        );
+        set_remote_description_for_viewer(&session, peer_id, answer_sdp)
+            .expect("set remote description");
+
+        for _ in 0..100 {
+            gstreamer::glib::MainContext::default().iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        println!("src: {}, dl: {}, vconv: {}, vrate: {}, vscale: {}, enc_sink: {}, enc_src: {}, pay: {}, tee_sink: {}, queue: {}",
+            src_count.load(std::sync::atomic::Ordering::SeqCst),
+            dl_count.load(std::sync::atomic::Ordering::SeqCst),
+            vconv_count.load(std::sync::atomic::Ordering::SeqCst),
+            vrate_count.load(std::sync::atomic::Ordering::SeqCst),
+            vscale_count.load(std::sync::atomic::Ordering::SeqCst),
+            enc_sink_count.load(std::sync::atomic::Ordering::SeqCst),
+            enc_count.load(std::sync::atomic::Ordering::SeqCst),
+            pay_count.load(std::sync::atomic::Ordering::SeqCst),
+            tee_sink_count.load(std::sync::atomic::Ordering::SeqCst),
+            buffer_count.load(std::sync::atomic::Ordering::SeqCst),
+        );
+        stop(&session).unwrap();
+    }
+}
+

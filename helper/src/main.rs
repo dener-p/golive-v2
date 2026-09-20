@@ -166,7 +166,7 @@ fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client
 
         app.poll_negotiations();
 
-        gstreamer::glib::MainContext::default().iteration(false);
+        while gstreamer::glib::MainContext::default().iteration(false) {}
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -265,8 +265,14 @@ impl App {
             Server::RoomIce {
                 peer_id, candidate, ..
             } => {
+                info!("ICE candidate from viewer {peer_id}: {}", candidate.candidate);
                 if let Some(s) = &self.session {
-                    pipeline::add_remote_candidate_for_viewer(s, &peer_id, &candidate.candidate);
+                    pipeline::add_remote_candidate_for_viewer(
+                        s,
+                        &peer_id,
+                        candidate.sdp_mline_index.unwrap_or(0),
+                        &candidate.candidate,
+                    );
                 }
             }
         }

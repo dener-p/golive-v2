@@ -60,7 +60,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     </p>
 
     <div class="card">
-      <video id="player" class="hidden" autoplay playsinline></video>
+      <video id="player" class="hidden" autoplay playsinline muted></video>
       <div id="waiting">
         <div class="row">
           <span class="mono" id="waiting-text">Waiting for the host to start broadcasting…</span>
@@ -153,7 +153,10 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             client.send({ type: 'ice', roomId, candidate });
           },
           onTrack: (evt) => {
-            video.srcObject = evt.streams[0] ?? null;
+            const stream = evt.streams[0] ?? new MediaStream([evt.track]);
+            video.srcObject = stream;
+            video.muted = true;
+            void video.play().catch(() => {});
             video.classList.remove('hidden');
             waiting.style.display = 'none';
             streamStatus.textContent = 'Receiving live media.';
