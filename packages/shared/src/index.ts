@@ -59,6 +59,19 @@ export interface IceServerInfo {
 
 export interface IceServersResponse {
   iceServers: IceServerInfo[];
+  turnConfigured: boolean;
+}
+
+export interface TurnConfigRequest {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
+export interface IceRetryState {
+  attempt: number;
+  maxAttempts: number;
+  turnAvailable: boolean;
 }
 
 // ---------------------------------------------------------------------------

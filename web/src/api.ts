@@ -1,4 +1,4 @@
-import type { HelperStatus, IceServersResponse, PublicUser, RoomInfo } from '@golive/shared';
+import type { HelperStatus, IceServersResponse, PublicUser, RoomInfo, TurnConfigRequest } from '@golive/shared';
 
 export class ApiError extends Error {
   constructor(
@@ -69,7 +69,14 @@ export const api = {
       body: JSON.stringify({ command, payload }),
     });
   },
-  iceServers(): Promise<IceServersResponse> {
-    return request('/api/ice-servers');
+  iceServers(roomId?: string): Promise<IceServersResponse> {
+    const params = roomId ? `?roomId=${encodeURIComponent(roomId)}` : '';
+    return request(`/api/ice-servers${params}`);
+  },
+  setTurnConfig(roomId: string, config: TurnConfigRequest | null): Promise<{ ok: boolean; turnConfigured: boolean }> {
+    return request(`/api/rooms/${encodeURIComponent(roomId)}/turn`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
   },
 };

@@ -2,6 +2,7 @@ import { api } from '../api';
 import { ensureUser } from '../session';
 import { loginCard, nav, qs, esc, watchLink } from '../ui';
 import { TestHost } from '../host-session';
+import { invalidateIceConfig } from '../webrtc';
 
 export async function renderHost(root: HTMLElement, query: URLSearchParams): Promise<void> {
   const user = await ensureUser();
@@ -96,6 +97,26 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       </div>
 
       <div class="card">
+        <h2>TURN configuration (optional)</h2>
+        <p class="muted">
+          If STUN cannot establish a direct connection, viewers will need a TURN server.
+          Configure your own TURN credentials below (e.g. Cloudflare TURN).
+        </p>
+        <div class="row" style="margin-bottom:8px">
+          <input id="turn-urls" type="text" placeholder="turn:your-server:3478" class="grow" />
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <input id="turn-username" type="text" placeholder="username" style="width:45%" />
+          <input id="turn-credential" type="password" placeholder="credential" style="width:45%" />
+        </div>
+        <div class="row">
+          <button id="turn-save" class="primary" ${roomId ? '' : 'disabled'}>Save TURN config</button>
+          <button id="turn-clear" ${roomId ? '' : 'disabled'}>Clear</button>
+          <span class="statusline muted" id="turn-status"></span>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>Test broadcast (in-browser host)</h2>
         <p class="muted">
           Emulates the native helper from this browser to exercise the signaling relay
@@ -148,6 +169,55 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     // helper commands
     root.querySelector('#cmd-start')?.addEventListener('click', () => void sendCommand('start'));
     root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
+
+    // TURN config
+    root.querySelector('#turn-save')?.addEventListener('click', async () => {
+      if (!roomId) return;
+      const urls = (root.querySelector('#turn-urls') as HTMLInputElement)?.value.trim();
+      const username = (root.querySelector('#turn-username') as HTMLInputElement)?.value.trim();
+      const credential = (root.querySelector('#turn-credential') as HTMLInputElement)?.value.trim();
+      const status = qs(root, '#turn-status');
+
+      if (!urls) {
+        status.textContent = 'TURN URL is required.';
+        status.className = 'statusline error';
+        return;
+      }
+
+      try {
+        const res = await api.setTurnConfig(roomId, {
+          urls: urls.split(',').map((s) => s.trim()).filter(Boolean),
+          username,
+          credential,
+        });
+        status.textContent = res.turnConfigured ? 'TURN config saved.' : 'TURN config cleared.';
+        status.className = 'statusline ok';
+        invalidateIceConfig(roomId);
+      } catch (err) {
+        status.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+        status.className = 'statusline error';
+      }
+    });
+
+    root.querySelector('#turn-clear')?.addEventListener('click', async () => {
+      if (!roomId) return;
+      const status = qs(root, '#turn-status');
+      try {
+        await api.setTurnConfig(roomId, null);
+        status.textContent = 'TURN config cleared.';
+        status.className = 'statusline ok';
+        invalidateIceConfig(roomId);
+        const urls = root.querySelector('#turn-urls') as HTMLInputElement | null;
+        const username = root.querySelector('#turn-username') as HTMLInputElement | null;
+        const credential = root.querySelector('#turn-credential') as HTMLInputElement | null;
+        if (urls) urls.value = '';
+        if (username) username.value = '';
+        if (credential) credential.value = '';
+      } catch (err) {
+        status.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+        status.className = 'statusline error';
+      }
+    });
 
     // test host
     root.querySelector('#test-start')?.addEventListener('click', () => {

@@ -208,9 +208,12 @@ pub fn create_offer(session: &StreamSession) -> Result<()> {
         });
     });
 
+    // GStreamer 1.27+ changed the `create-offer` action to take
+    // (promise, options): options is a GstStructure (empty = defaults).
+    let options = gstreamer::Structure::new_empty("create-offer-options");
     session
         .webrtcbin
-        .emit_by_name::<()>("create-offer", &[&promise]);
+        .emit_by_name::<()>("create-offer", &[&promise, &options]);
     Ok(())
 }
 

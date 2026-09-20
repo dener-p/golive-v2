@@ -1,12 +1,119 @@
-import type { IceCandidateMessage } from '@golive/shared';
+import type { IceCandidateMessage, IceServersResponse } from '@golive/shared';
 import { api } from './api';
 
-let cachedIceConfig: Promise<RTCConfiguration> | null = null;
+/** Cache keyed by roomId (or 'global' for roomId-less fetches). */
+const iceConfigCache = new Map<string, Promise<RTCConfiguration>>();
 
-/** Fetch ICE servers from the backend (STUN now; TURN when configured / M2). */
-export function iceConfig(): Promise<RTCConfiguration> {
-  cachedIceConfig ??= api.iceServers().then((res) => ({ iceServers: res.iceServers }));
-  return cachedIceConfig;
+/** Fetch ICE servers from the backend (STUN always; TURN when configured). */
+export function iceConfig(roomId?: string): Promise<RTCConfiguration> {
+  const key = roomId ?? 'global';
+  let cached = iceConfigCache.get(key);
+  if (!cached) {
+    cached = api.iceServers(roomId).then((res) => ({ iceServers: res.iceServers }));
+    iceConfigCache.set(key, cached);
+  }
+  return cached;
+}
+
+/** Invalidate the ice-servers cache for a room (e.g. after TURN config changes). */
+export function invalidateIceConfig(roomId?: string): void {
+  iceConfigCache.delete(roomId ?? 'global');
+}
+
+export interface IceRetryConfig {
+  /** Maximum number of ICE attempts (1 = no retry). Default: 2 */
+  maxAttempts?: number;
+  /** Delay in ms before retrying with TURN after STUN-only failure. Default: 2000 */
+  retryDelayMs?: number;
+  /** Called when an attempt fails and a retry is planned. */
+  onRetryAttempt?: (attempt: number, reason: string) => void;
+  /** Called when all attempts are exhausted. */
+  onRetryExhausted?: (lastReason: string) => void;
+}
+
+/**
+ * Create a peer connection with ICE retry logic.
+ *
+ * Flow:
+ * 1. Try with the ice servers returned by the backend (STUN + optional TURN).
+ * 2. If connection fails and turnConfigured is false, surface a clear error.
+ * 3. If connection fails and TURN is available, retry with a fresh peer.
+ */
+export function createPeerWithRetry(
+  baseConfig: RTCConfiguration,
+  handlers: PeerHandlers,
+  retryConfig?: IceRetryConfig,
+  turnAvailable?: boolean,
+): { pc: RTCPeerConnection; abort: () => void } {
+  const maxAttempts = retryConfig?.maxAttempts ?? 2;
+  const retryDelayMs = retryConfig?.retryDelayMs ?? 2000;
+  let attempt = 0;
+  let currentPc: RTCPeerConnection | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let aborted = false;
+
+  const cleanup = (): void => {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  const createAttempt = (): RTCPeerConnection => {
+    attempt++;
+    const pc = createPeer(baseConfig, {
+      onIceCandidate: handlers.onIceCandidate,
+      onTrack: handlers.onTrack,
+      onStateChange: (state) => {
+        handlers.onStateChange(state);
+
+        // Handle connection failure with retry logic
+        if ((state === 'failed' || state === 'disconnected') && !aborted) {
+          if (attempt < maxAttempts && turnAvailable) {
+            retryConfig?.onRetryAttempt?.(attempt, `connection ${state}, retrying with TURN`);
+            cleanup();
+            retryTimer = setTimeout(() => {
+              if (aborted) return;
+              try {
+                currentPc?.close();
+              } catch {
+                /* ignore */
+              }
+              currentPc = createAttempt();
+              handlers.onRetryNewPeer?.(currentPc);
+            }, retryDelayMs);
+          } else if (state === 'failed') {
+            if (!turnAvailable) {
+              retryConfig?.onRetryExhausted?.(
+                'Direct connection failed. The host needs to configure a TURN server for this network.',
+              );
+            } else {
+              retryConfig?.onRetryExhausted?.(
+                `Connection failed after ${attempt} attempt${attempt === 1 ? '' : 's'}.`,
+              );
+            }
+          }
+        }
+      },
+    });
+    currentPc = pc;
+    return pc;
+  };
+
+  const pc = createAttempt();
+
+  return {
+    pc,
+    abort: () => {
+      aborted = true;
+      cleanup();
+      try {
+        currentPc?.close();
+      } catch {
+        /* ignore */
+      }
+    },
+  };
 }
 
 /** Prefer codecs by MIME type (best-effort; only called before offer/answer). */
@@ -60,6 +167,7 @@ export interface PeerHandlers {
   onIceCandidate(candidate: IceCandidateMessage): void;
   onTrack(event: RTCTrackEvent): void;
   onStateChange(state: RTCPeerConnectionState): void;
+  onRetryNewPeer?: (newPc: RTCPeerConnection) => void;
 }
 
 export function createPeer(config: RTCConfiguration, handlers: PeerHandlers): RTCPeerConnection {

@@ -1,9 +1,10 @@
 import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
+import { api } from './api';
 import { connectSignaling, type SignalingClient } from './signaling';
 import { samplePeerStats, summarizeStats, type StatsState } from './stats';
 import {
   AV1_FIRST,
-  createPeer,
+  createPeerWithRetry,
   flushCandidateQueue,
   iceConfig,
   preferCodecs,
@@ -145,21 +146,47 @@ export class TestHost {
     if (!this.stream) return;
 
     try {
-      const config = await iceConfig();
-      const pc = createPeer(config, {
-        onIceCandidate: (candidate) => {
-          if (!this.roomId) return;
-          this.client?.send({ type: 'ice', roomId: this.roomId, candidate });
+      const iceConfigResult = await api.iceServers(this.roomId ?? undefined);
+      const turnAvailable = iceConfigResult.turnConfigured;
+      const config: RTCConfiguration = { iceServers: iceConfigResult.iceServers };
+
+      const { pc, abort } = createPeerWithRetry(
+        config,
+        {
+          onIceCandidate: (candidate) => {
+            if (!this.roomId) return;
+            this.client?.send({ type: 'ice', roomId: this.roomId, candidate });
+          },
+          onTrack: () => {
+            /* host direction only */
+          },
+          onStateChange: (state) => {
+            if (state === 'failed' || state === 'disconnected') {
+              this.onUpdate(`viewer link ${state}`, 'error');
+            }
+          },
+          onRetryNewPeer: (newPc) => {
+            this.peers.set(viewerId, newPc);
+            this.iceQueues.set(viewerId, []);
+            for (const track of this.stream!.getTracks()) {
+              newPc.addTrack(track, this.stream!);
+            }
+            preferCodecs(newPc, 'video', AV1_FIRST);
+            // Re-create and send offer
+            void this.sendOffer(viewerId, newPc);
+          },
         },
-        onTrack: () => {
-          /* host direction only */
+        {
+          maxAttempts: 2,
+          onRetryAttempt: (attempt, reason) => {
+            this.onUpdate(`viewer ${viewerId.slice(0, 8)}: attempt ${attempt} — ${reason}`, 'muted');
+          },
+          onRetryExhausted: (reason) => {
+            this.onUpdate(`viewer ${viewerId.slice(0, 8)}: ${reason}`, 'error');
+          },
         },
-        onStateChange: (state) => {
-          if (state === 'failed' || state === 'disconnected') {
-            this.onUpdate(`viewer link ${state}`, 'error');
-          }
-        },
-      });
+        turnAvailable,
+      );
 
       this.peers.set(viewerId, pc);
       this.iceQueues.set(viewerId, []);
@@ -183,6 +210,23 @@ export class TestHost {
     } catch (err) {
       this.onUpdate(`failed to open viewer link: ${err instanceof Error ? err.message : err}`, 'error');
       this.dropViewer(viewerId);
+    }
+  }
+
+  private async sendOffer(viewerId: string, pc: RTCPeerConnection): Promise<void> {
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (pc.localDescription && this.roomId) {
+        this.client?.send({
+          type: 'sdp',
+          roomId: this.roomId,
+          sdp: { type: pc.localDescription.type as 'offer', sdp: pc.localDescription.sdp },
+          target: viewerId,
+        });
+      }
+    } catch (err) {
+      this.onUpdate(`retry offer failed: ${err instanceof Error ? err.message : err}`, 'error');
     }
   }
 

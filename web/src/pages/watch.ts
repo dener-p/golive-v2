@@ -5,7 +5,7 @@ import { ensureUser } from '../session';
 import { samplePeerStats, summarizeStats, pathLabel, type StatsState } from '../stats';
 import {
   AV1_FIRST,
-  createPeer,
+  createPeerWithRetry,
   flushCandidateQueue,
   iceConfig,
   preferCodecs,
@@ -142,34 +142,62 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   const ensurePeer = async (): Promise<RTCPeerConnection | null> => {
     if (pc) return pc;
     try {
-      const config = await iceConfig();
-      const newPc = createPeer(config, {
-        onIceCandidate: (candidate) => {
-          client.send({ type: 'ice', roomId, candidate });
+      const iceConfigResult = await api.iceServers(roomId);
+      const turnAvailable = iceConfigResult.turnConfigured;
+      const config: RTCConfiguration = { iceServers: iceConfigResult.iceServers };
+
+      const { pc: newPc, abort } = createPeerWithRetry(
+        config,
+        {
+          onIceCandidate: (candidate) => {
+            client.send({ type: 'ice', roomId, candidate });
+          },
+          onTrack: (evt) => {
+            video.srcObject = evt.streams[0] ?? null;
+            video.classList.remove('hidden');
+            waiting.style.display = 'none';
+            streamStatus.textContent = 'Receiving live media.';
+            streamStatus.className = 'statusline ok';
+          },
+          onStateChange: (state) => {
+            connStatus.textContent = `Peer ${state}.`;
+            connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
+            if (state === 'connected') {
+              startStats();
+            } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+              stopStats();
+              statsLine.hidden = true;
+              pathBadge.hidden = true;
+            }
+          },
+          onRetryNewPeer: (newPeer) => {
+            pc = newPeer;
+            newPeer.addTransceiver('video', { direction: 'recvonly' });
+            preferCodecs(newPeer, 'video', AV1_FIRST);
+          },
         },
-        onTrack: (evt) => {
-          video.srcObject = evt.streams[0] ?? null;
-          video.classList.remove('hidden');
-          waiting.style.display = 'none';
-          streamStatus.textContent = 'Receiving live media.';
-          streamStatus.className = 'statusline ok';
+        {
+          maxAttempts: 2,
+          onRetryAttempt: (attempt, reason) => {
+            streamStatus.textContent = `Attempt ${attempt}: ${reason}`;
+            streamStatus.className = 'statusline muted';
+          },
+          onRetryExhausted: (reason) => {
+            streamStatus.textContent = reason;
+            streamStatus.className = 'statusline error';
+          },
         },
-        onStateChange: (state) => {
-          connStatus.textContent = `Peer ${state}.`;
-          connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
-          if (state === 'connected') {
-            startStats();
-          } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-            stopStats();
-            statsLine.hidden = true;
-            pathBadge.hidden = true;
-          }
-        },
-      });
+        turnAvailable,
+      );
+
       // Recv-only video; AV1 preferred when available.
       newPc.addTransceiver('video', { direction: 'recvonly' });
       preferCodecs(newPc, 'video', AV1_FIRST);
       pc = newPc;
+
+      // Store abort function for cleanup
+      window.addEventListener('pagehide', () => abort());
+
       return newPc;
     } catch (err) {
       streamStatus.textContent = `Could not set up media: ${err instanceof Error ? err.message : err}`;
