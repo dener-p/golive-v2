@@ -5,8 +5,7 @@
   "workspaces": [
     "packages/*",
     "server",
-    "web",
-    "helper-stub"
+    "web"
   ],
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,magenta \"bun run dev:server\" \"bun run dev:web\"",

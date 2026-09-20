@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 const sharedEntry = fileURLToPath(
   new URL('../packages/shared/src/index.ts', import.meta.url),
 );
-const SERVER_URL = process.env.SERVER_URL ?? 'http://localhost:8787';
+const SERVER_URL = process.env.SERVER_URL ?? 'https://api-golive.puhl.dev';
 
 export default defineConfig({
   resolve: {

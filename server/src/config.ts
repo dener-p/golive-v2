@@ -14,7 +14,7 @@ function splitList(value: string | undefined): string[] {
   return (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-const port = Number(process.env.PORT ?? 8787);
+const port = Number(process.env.PORT ?? 3000);
 const baseUrl = (process.env.BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
 
 export const config: Config = {
