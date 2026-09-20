@@ -44,6 +44,12 @@ pub struct ViewerEntry {
     /// Offer waiting to be applied via set-local-description.
     /// Created by create-offer, applied on the next poll_negotiations tick.
     pub pending_offer: Arc<Mutex<Option<gstreamer_webrtc::WebRTCSessionDescription>>>,
+    /// Promises handed to webrtcbin that webrtcbin resolves asynchronously
+    /// (set-local-description, set-remote-description). Rust must keep its
+    /// handle alive until the change function fires, otherwise the promise is
+    /// freed while still PENDING -> it expires and the description is never
+    /// applied. The change function clears this list when it fires.
+    pub pending_promises: Arc<Mutex<Vec<gstreamer::Promise>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +105,9 @@ pub fn build(out: tokio::sync::mpsc::UnboundedSender<Client>) -> Result<StreamSe
         match msg.view() {
             MessageView::Error(err) => {
                 error!("stream error: {} ({:?})", err.error(), err.debug());
+            }
+            MessageView::Warning(warn) => {
+                warn!("stream warning: {} ({:?})", warn.error(), warn.debug());
             }
             MessageView::Eos(_) => info!("stream EOS"),
             _ => {}
@@ -209,6 +218,7 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
             (c.room_id.clone(), c.peer_id.clone())
         };
         if room_id.is_empty() || peer_id.is_empty() {
+            warn!("ICE candidate fired but dropped (room={room_id:?} peer={peer_id:?}): {candidate}");
             return None;
         }
         info!("local ICE candidate (m={mline}) for viewer {peer_id}: {candidate}");
@@ -229,6 +239,7 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
             queue,
             ctx,
             pending_offer: Arc::new(Mutex::new(None)),
+            pending_promises: Arc::new(Mutex::new(Vec::new())),
         },
     );
 
@@ -354,13 +365,20 @@ pub fn apply_pending_offers(session: &StreamSession) {
         info!("applying set-local-description for viewer {peer_id}");
         let webrtcbin = entry.webrtcbin.clone();
         let vp_id = peer_id.clone();
+        let pending = entry.pending_promises.clone();
         let promise = gstreamer::Promise::with_change_func(move |res| {
             match res {
                 Ok(Some(_)) => info!("set-local-description OK for viewer {vp_id}"),
                 Ok(None) => warn!("set-local-description promise expired for viewer {vp_id}"),
                 Err(e) => warn!("set-local-description error for viewer {vp_id}: {e:?}"),
             }
+            // The promise is done for good (resolved/expired/interrupted);
+            // release everything we were holding open for this viewer.
+            pending.lock().unwrap().clear();
         });
+        // Keep the Promise alive until the change function fires: webrtcbin may
+        // resolve this promise asynchronously, after emit_by_name returns.
+        entry.pending_promises.lock().unwrap().push(promise.clone());
         webrtcbin.emit_by_name::<()>("set-local-description", &[&offer, &promise]);
     }
 }
@@ -388,10 +406,20 @@ pub fn set_remote_description_for_viewer(
         gstreamer_webrtc::WebRTCSDPType::Answer,
         sdp,
     );
-    let promise = gstreamer::Promise::new();
-    entry
-        .webrtcbin
-        .emit_by_name::<()>("set-remote-description", &[&desc, &promise]);
+    let webrtcbin = entry.webrtcbin.clone();
+    let vp_id = peer_id.to_string();
+    let pending = entry.pending_promises.clone();
+    let promise = gstreamer::Promise::with_change_func(move |res| {
+        match res {
+            Ok(Some(_)) => info!("set-remote-description OK for viewer {vp_id}"),
+            Ok(None) => warn!("set-remote-description promise expired for viewer {vp_id}"),
+            Err(e) => warn!("set-remote-description error for viewer {vp_id}: {e:?}"),
+        }
+        pending.lock().unwrap().clear();
+    });
+    // Keep the Promise alive until the change function fires (see apply_pending_offers).
+    entry.pending_promises.lock().unwrap().push(promise.clone());
+    webrtcbin.emit_by_name::<()>("set-remote-description", &[&desc, &promise]);
     play(session)
 }
 
