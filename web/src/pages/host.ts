@@ -184,7 +184,9 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     }
 
     // helper commands
-    root.querySelector('#cmd-start')?.addEventListener('click', () => void sendCommand('start'));
+    root.querySelector('#cmd-start')?.addEventListener('click', () => {
+      if (roomId) void sendCommand('start', { roomId });
+    });
     root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
 
     // Allowlist management
@@ -400,11 +402,11 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     }
   };
 
-  const sendCommand = async (command: string): Promise<void> => {
+  const sendCommand = async (command: string, payload?: unknown): Promise<void> => {
     const out = root.querySelector('#command-result');
     if (!out) return;
     try {
-      const res = await api.helperCommand(command);
+      const res = await api.helperCommand(command, payload);
       if (!res.delivered) {
         out.textContent = `Command "${command}" NOT delivered — helper offline.`;
         out.className = 'statusline error';
