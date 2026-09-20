@@ -362,9 +362,14 @@ pub fn set_remote_description_for_viewer(
         .context("viewer not found")?;
     let sdp = gstreamer_sdp::SDPMessage::parse_buffer(sdp_text.as_bytes())
         .context("viewer SDP is not valid")?;
+    let desc = gstreamer_webrtc::WebRTCSessionDescription::new(
+        gstreamer_webrtc::WebRTCSDPType::Answer,
+        sdp,
+    );
+    let promise = gstreamer::Promise::new();
     entry
         .webrtcbin
-        .emit_by_name::<()>("set-remote-description", &[&sdp]);
+        .emit_by_name::<()>("set-remote-description", &[&desc, &promise]);
     play(session)
 }
 
