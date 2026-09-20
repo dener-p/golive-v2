@@ -1,16 +1,22 @@
-//! golive native helper (M2): Windows screen capture -> AV1 -> WebRTC.
+//! golive native helper (M4): Windows screen capture -> AV1 -> N viewers.
 //!
 //! Two threads:
 //!   - main thread: tokio runtime; the WS client (ws.rs) plus ctrl-C handling.
 //!   - gst thread: owns every gstreamer object (they are !Send) and drives the
 //!     helper state machine. The GLib default main context is pumped manually
 //!     in its loop so webrtcbin promises/signals fire without a MainLoop.
+//!
+//! M4 change: the pipeline encodes once and fans the RTP stream through a `tee`
+//! element to one `webrtcbin` per connected viewer.  Viewers join and leave
+//! dynamically; each gets its own SDP negotiation and ICE agent.
 
 mod pipeline;
 mod protocol;
 mod ws;
 
+use std::collections::HashMap;
 use std::env;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -43,21 +49,26 @@ impl RunState {
     }
 }
 
+/// Per-viewer state tracked on the app (GStreamer) thread.
+struct ViewerState {
+    /// Whether we already sent an SDP offer for this viewer.
+    offer_sent: bool,
+}
+
 struct App {
     out: UnboundedSender<Client>,
     state: RunState,
     session: Option<pipeline::StreamSession>,
-    offer_sent: bool,
+    /// Per-viewer negotiation state keyed by peer_id.
+    viewers: HashMap<String, ViewerState>,
     shutdown: bool,
     last_neg_debug: u64,
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp_millis()
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     let base = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8787".into());
     let ws_url = format!("{}/ws/helper", base.replace("http", "ws").replace("https", "wss"));
@@ -70,7 +81,6 @@ fn main() -> Result<()> {
     rt.block_on(async move {
         let cookie = obtain_cookie(&base).await?;
 
-        // Cross-thread channels (a bounded WS + app state live on different threads).
         let (out_tx, out_rx) = unbounded_channel::<Client>();
         let (in_tx, in_rx) = unbounded_channel::<Inbound>();
 
@@ -95,7 +105,6 @@ fn main() -> Result<()> {
     })
 }
 
-/// Dev auth (or SESSION_COOKIE override) — same trick as helper-stub.
 async fn obtain_cookie(base: &str) -> Result<String> {
     if let Ok(cookie) = env::var("SESSION_COOKIE") {
         return Ok(cookie);
@@ -108,7 +117,7 @@ async fn obtain_cookie(base: &str) -> Result<String> {
         .context("dev login request")?;
     if !res.status().is_success() {
         return Err(anyhow!(
-            "dev login failed with HTTP {} — are the DISCORD_* env vars set?",
+            "dev login failed with HTTP {}",
             res.status()
         ));
     }
@@ -128,10 +137,7 @@ async fn obtain_cookie(base: &str) -> Result<String> {
 // GStreamer thread
 // ---------------------------------------------------------------------------
 
-fn gst_thread(
-    mut in_rx: UnboundedReceiver<Inbound>,
-    out: UnboundedSender<Client>,
-) {
+fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client>) {
     if let Err(e) = gstreamer::init() {
         error!("gstreamer init failed: {e}");
         return;
@@ -142,12 +148,11 @@ fn gst_thread(
         out,
         state: RunState::Idle,
         session: None,
-        offer_sent: false,
+        viewers: HashMap::new(),
         shutdown: false,
         last_neg_debug: 0,
     };
 
-    // Process gstreamer/glib sources (promises, bus, timeouts) + our channel.
     loop {
         while let Ok(msg) = in_rx.try_recv() {
             app.handle(msg);
@@ -159,7 +164,7 @@ fn gst_thread(
             break;
         }
 
-        app.poll_negotiation();
+        app.poll_negotiations();
 
         gstreamer::glib::MainContext::default().iteration(false);
         std::thread::sleep(Duration::from_millis(2));
@@ -172,6 +177,10 @@ fn gst_thread(
     }
     info!("gst thread exiting");
 }
+
+// ---------------------------------------------------------------------------
+// App message handling
+// ---------------------------------------------------------------------------
 
 impl App {
     fn handle(&mut self, msg: Inbound) {
@@ -189,7 +198,11 @@ impl App {
             Server::Ping => {
                 let state = self.state.as_str();
                 let detail = if let Some(s) = &self.session {
-                    format!("pipeline state {:?}", s.pipeline.current_state())
+                    format!(
+                        "pipeline {:?}, {} viewer(s)",
+                        s.pipeline.current_state(),
+                        s.viewers.len()
+                    )
                 } else {
                     "no pipeline".into()
                 };
@@ -209,12 +222,21 @@ impl App {
                 error,
             } => {
                 if ok {
+                    let rid = room_id.as_deref().unwrap_or("?");
                     info!(
-                        "attached to room {} ({} viewer(s) waiting: {})",
-                        room_id.as_deref().unwrap_or("?"),
+                        "attached to room {rid} ({:?} viewer(s) waiting: {:?})",
                         viewer_count.unwrap_or(0),
-                        viewers.unwrap_or_default().join(", ")
+                        viewers.unwrap_or_default()
                     );
+                    // Set room_id on all existing viewer contexts + any
+                    // viewers that arrived before attach-ack.
+                    if let Some(rid) = &room_id {
+                        if let Some(s) = &self.session {
+                            for pid in s.viewers.keys().cloned().collect::<Vec<_>>() {
+                                pipeline::set_viewer_room(s, &pid, rid);
+                            }
+                        }
+                    }
                 } else {
                     let detail = error
                         .map(|e| format!("{e}"))
@@ -224,45 +246,25 @@ impl App {
             }
             Server::PeerJoined { peer_id, .. } => {
                 info!("viewer {peer_id} joined");
-                self.target_peer(&peer_id);
+                self.add_viewer(&peer_id);
             }
             Server::PeerLeft { peer_id, .. } => {
                 info!("viewer {peer_id} left");
-                if let Some(s) = &self.session {
-                    let is_ours = s
-                        .ctx
-                        .lock()
-                        .unwrap()
-                        .peer_id
-                        .as_deref()
-                        == Some(peer_id.as_str());
-                    if is_ours {
-                        s.ctx.lock().unwrap().peer_id = None;
-                        self.offer_sent = false;
-                    }
-                }
+                self.remove_viewer(&peer_id);
             }
-            Server::RoomSdp {
-                peer_id,
-                sdp,
-                ..
-            } => {
+            Server::RoomSdp { peer_id, sdp, .. } => {
                 info!("SDP from viewer {peer_id}: {}", sdp.sdp_type);
                 if let Some(s) = &self.session {
-                    let is_ours = s.ctx.lock().unwrap().peer_id.as_deref() == Some(peer_id.as_str());
-                    if is_ours {
-                        if let Err(e) = pipeline::set_remote_description(s, &sdp.sdp) {
-                            error!("set remote description failed: {e}");
-                        }
+                    if let Err(e) = pipeline::set_remote_description_for_viewer(s, &peer_id, &sdp.sdp) {
+                        error!("set remote description failed for {peer_id}: {e}");
                     }
                 }
             }
-            Server::RoomIce { peer_id, candidate, .. } => {
+            Server::RoomIce {
+                peer_id, candidate, ..
+            } => {
                 if let Some(s) = &self.session {
-                    let is_ours = s.ctx.lock().unwrap().peer_id.as_deref() == Some(peer_id.as_str());
-                    if is_ours {
-                        pipeline::add_remote_candidate(s, &candidate.candidate);
-                    }
+                    pipeline::add_remote_candidate_for_viewer(s, &peer_id, &candidate.candidate);
                 }
             }
         }
@@ -295,7 +297,12 @@ impl App {
             }
             "stop" => {
                 self.stop_stream();
-                let _ = self.out.send(Client::ack(id, true, self.state.as_str(), Some("stopped".into())));
+                let _ = self.out.send(Client::ack(
+                    id,
+                    true,
+                    self.state.as_str(),
+                    Some("stopped".into()),
+                ));
             }
             other => {
                 let _ = self.out.send(Client::ack(
@@ -308,6 +315,8 @@ impl App {
         }
     }
 
+    // -- stream lifecycle ----------------------------------------------------
+
     fn start_stream(&mut self, room_id: &str) {
         if self.session.is_some() {
             info!("restarting stream (room {room_id})");
@@ -315,11 +324,14 @@ impl App {
         }
         match pipeline::build(self.out.clone()) {
             Ok(session) => {
+                // Set room on any viewers that were queued before stream start.
+                for pid in self.viewers.keys().cloned().collect::<Vec<_>>() {
+                    pipeline::set_viewer_room(&session, &pid, room_id);
+                }
                 if let Err(e) = pipeline::play(&session) {
                     error!("could not start pipeline: {e}");
                     return;
                 }
-                session.ctx.lock().unwrap().room_id = Some(room_id.to_string());
                 let _ = session.out.send(Client::AttachRoom {
                     room_id: room_id.to_string(),
                 });
@@ -331,54 +343,121 @@ impl App {
         }
     }
 
-    fn target_peer(&mut self, peer_id: &str) {
-        if let Some(s) = &self.session {
-            s.ctx.lock().unwrap().peer_id = Some(peer_id.to_string());
-            self.offer_sent = false;
-            info!("targeting viewer {peer_id} for negotiation");
-        } else {
-            warn!("viewer joined but no stream is running");
-        }
-    }
-
-    /// Create the offer once webrtcbin asks and a viewer is targeted.
-    fn poll_negotiation(&mut self) {
-        if self.offer_sent {
-            return;
-        }
-        let Some(session) = &self.session else {
-            return;
-        };
-        if !session.negotiation_pending.load(std::sync::atomic::Ordering::SeqCst) {
-            // Diagnostics: sanity-check the app loop is ticking while we wait.
-            self.last_neg_debug = self.last_neg_debug.wrapping_add(1);
-            if self.last_neg_debug % 500 == 1 && session.ctx.lock().unwrap().peer_id.is_some() {
-                info!(
-                    "still waiting for webrtcbin negotiation (loop alive) — pipeline state {:?}",
-                    session.pipeline.current_state()
-                );
-            }
-            return;
-        }
-        if session.ctx.lock().unwrap().peer_id.is_none() {
-            return;
-        }
-        match pipeline::create_offer(session) {
-            Ok(()) => {
-                self.offer_sent = true;
-                info!("offer created and queued");
-            }
-            Err(e) => warn!("create offer failed: {e}"),
-        }
-    }
-
     fn stop_stream(&mut self) {
         if let Some(session) = self.session.take() {
             let _ = pipeline::stop(&session);
             self.state = RunState::Idle;
-            self.offer_sent = false;
+            self.viewers.clear();
             let _ = self.out.send(Client::DetachRoom);
             info!("stream stopped");
+        }
+    }
+
+    // -- multi-viewer management --------------------------------------------
+
+    fn add_viewer(&mut self, peer_id: &str) {
+        self.viewers
+            .insert(peer_id.to_string(), ViewerState { offer_sent: false });
+
+        // Try to get the known room_id from an existing viewer before mutating.
+        let known_room: Option<String> = self.session.as_ref().and_then(|s| {
+            s.viewers
+                .values()
+                .next()
+                .and_then(|v| {
+                    let c = v.ctx.lock().ok()?;
+                    if c.room_id.is_empty() { None } else { Some(c.room_id.clone()) }
+                })
+        });
+
+        if let Some(ref mut s) = self.session {
+            if let Err(e) = pipeline::add_viewer(s, peer_id) {
+                error!("failed to add viewer {peer_id}: {e}");
+                self.viewers.remove(peer_id);
+                return;
+            }
+            if let Some(room_id) = &known_room {
+                pipeline::set_viewer_room(s, peer_id, room_id);
+            }
+            info!(
+                "now serving {} viewer(s): {}",
+                s.viewers.len(),
+                s.viewers.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+
+    fn remove_viewer(&mut self, peer_id: &str) {
+        self.viewers.remove(peer_id);
+        if let Some(s) = &mut self.session {
+            pipeline::remove_viewer(s, peer_id);
+            info!(
+                "now serving {} viewer(s)",
+                s.viewers.len()
+            );
+        }
+    }
+
+    /// Check all viewers for pending webrtcbin negotiations and create offers.
+    fn poll_negotiations(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+
+        // Collect viewer peer_ids that need an offer.
+        let pending: Vec<String> = session
+            .viewers
+            .iter()
+            .filter(|(_, entry)| {
+                entry.negotiation_pending.load(Ordering::SeqCst)
+            })
+            .map(|(pid, _)| pid.clone())
+            .collect();
+
+        for peer_id in pending {
+            // Check if we already sent an offer or haven't set room_id yet.
+            if let Some(vs) = self.viewers.get(&peer_id) {
+                if vs.offer_sent {
+                    continue;
+                }
+            }
+
+            // Check that room_id is set.
+            let has_room = session
+                .viewers
+                .get(&peer_id)
+                .map(|e| {
+                    let c = e.ctx.lock().unwrap();
+                    !c.room_id.is_empty()
+                })
+                .unwrap_or(false);
+
+            if !has_room {
+                // Diagnostics: log that we're waiting.
+                self.last_neg_debug = self.last_neg_debug.wrapping_add(1);
+                if self.last_neg_debug % 500 == 1 {
+                    info!(
+                        "waiting for room_id before creating offer for viewer {peer_id}"
+                    );
+                }
+                continue;
+            }
+
+            match pipeline::create_offer_for_viewer(session, &peer_id) {
+                Ok(()) => {
+                    if let Some(vs) = self.viewers.get_mut(&peer_id) {
+                        vs.offer_sent = true;
+                    }
+                    // Reset the negotiation flag.
+                    if let Some(entry) = session.viewers.get(&peer_id) {
+                        entry
+                            .negotiation_pending
+                            .store(false, Ordering::SeqCst);
+                    }
+                    info!("offer created for viewer {peer_id}");
+                }
+                Err(e) => warn!("create offer failed for {peer_id}: {e}"),
+            }
         }
     }
 }
