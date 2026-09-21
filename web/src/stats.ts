@@ -292,14 +292,24 @@ function kindsSummary(kinds: CandidateKind[]): string {
 }
 
 /**
- * Black-screen diagnosis for the watch page: when ICE is connected but zero
- * video frames decode, this classifies the failure into one of two buckets —
- *  * transport: no RTP bytes arrive at all on the selected pair (NAT/CGNAT /
- *    dead-interface pair problem), or
- *  * decode: bytes arrive but nothing decodes (codec/keyframe problem,
+ * Black-screen / no-path diagnosis for the watch page. Classifies a session
+ * that is not rendering frames into:
+ *  * failed — ICE could not connect any candidate pair (no path at all),
+ *  * transport — ICE connected but zero RTP bytes arrive on the selected pair
+ *    (NAT/CGNAT / dead-interface pair problem),
+ *  * decode — bytes arrive but nothing decodes (codec/keyframe problem,
  *    e.g. missing AV1 decode on the device).
  */
 export function stallDiagnosis(s: PeerStatsSnapshot): string | null {
+  if (s.connectionState === 'failed') {
+    const local = kindsSummary(s.localKinds);
+    const remote = kindsSummary(s.remoteKinds);
+    const pair =
+      s.localCandidate && s.remoteCandidate
+        ? `${s.localCandidate.kind} ⇄ ${s.remoteCandidate.kind}`
+        : 'no pair';
+    return `NO PATH: ICE failed · ${pair} · local [${local}] · remote [${remote}]. No candidate pair connected — STUN/srflx missing on one side.`;
+  }
   if (s.connectionState !== 'connected') return null;
   const dec = s.framesDecoded ?? 0;
   if (dec > 0) return null;

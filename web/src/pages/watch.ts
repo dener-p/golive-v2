@@ -156,7 +156,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   };
 
   const renderStats = async (): Promise<void> => {
-    if (!pc || pc.connectionState !== 'connected') return;
+    if (!pc || (pc.connectionState !== 'connected' && pc.connectionState !== 'failed')) return;
     try {
       const { snapshot, state } = await samplePeerStats(pc, statsState);
       statsState = state;
@@ -167,13 +167,14 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       }
       statsLine.hidden = false;
       statsLine.textContent = summarizeStats(snapshot);
+      const iceFailed = pc.connectionState === 'failed';
       if (mediaLive) {
         diagLine.hidden = true;
-      } else if (trackAt > 0 && performance.now() - trackAt > 5_000) {
+      } else if (iceFailed || (trackAt > 0 && performance.now() - trackAt > 5_000)) {
         const stall = stallDiagnosis(snapshot);
         if (stall) {
           diagLine.hidden = false;
-          diagLine.textContent = `${stall}${await av1Probe()}`;
+          diagLine.textContent = `${stall}${iceFailed ? '' : await av1Probe()}`;
         } else {
           diagLine.hidden = true;
         }

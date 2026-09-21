@@ -113,6 +113,23 @@ pub struct StreamSession {
 /// ordering guarantees this virtually never happens in practice).
 pub const DEFAULT_STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 
+/// webrtcbin's `stun-server` property expects a URI with an authority
+/// (`stun://host:port`), but the backend ICE config uses the standard
+/// single-colon form (`stun:host:port`). GStreamer silently ignores an
+/// unparseable STUN server and the ICE agent then gathers *only host
+/// candidates* — no `srflx` — so a remote viewer (e.g. on cellular) can never
+/// reach the helper directly and ICE ends in `failed`. Normalize before
+/// assigning the property. Idempotent; `stuns://` (TLS STUN) passes through.
+pub fn normalize_stun_url(url: &str) -> String {
+    if url.starts_with("stun://") || url.starts_with("stuns://") {
+        return url.to_string();
+    }
+    if let Some(rest) = url.strip_prefix("stun:") {
+        return format!("stun://{rest}");
+    }
+    url.to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Build the base pipeline (up to tee — no webrtcbin yet)
 // ---------------------------------------------------------------------------
@@ -209,8 +226,8 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .property_from_str("name", &format!("wc_{peer_id}"))
         .build()
         .context("failed to create webrtcbin")?;
-    webrtcbin.set_property_from_str("stun-server", &session.stun);
-    info!("viewer {peer_id}: using STUN server {}", session.stun);
+    webrtcbin.set_property_from_str("stun-server", &normalize_stun_url(&session.stun));
+    info!("viewer {peer_id}: using STUN server {}", normalize_stun_url(&session.stun));
 
     // --- guarantee a media m-line in the offer ---------------------------------
     // Pre-configure a sendonly AV1 transceiver so the SDP offer always contains
@@ -584,6 +601,28 @@ pub fn stop(session: &StreamSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_stun_url() {
+        // Backend single-colon form (what iceServers() returns) → URI form.
+        assert_eq!(
+            normalize_stun_url("stun:stun.l.google.com:19302"),
+            "stun://stun.l.google.com:19302"
+        );
+        assert_eq!(
+            normalize_stun_url("stun:stun1.l.google.com:19302"),
+            "stun://stun1.l.google.com:19302"
+        );
+        // Already-normalized and TLS STUN pass through unchanged.
+        assert_eq!(
+            normalize_stun_url("stun://stun.l.google.com:19302"),
+            "stun://stun.l.google.com:19302"
+        );
+        assert_eq!(
+            normalize_stun_url("stuns://stun.example.com:5349"),
+            "stuns://stun.example.com:5349"
+        );
+    }
 
     #[test]
     fn test_pipeline_offer() {
