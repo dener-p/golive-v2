@@ -154,7 +154,7 @@ export type HelperMessage =
     };
 
 export type ServerHelperMessage =
-  | { type: 'hello-ack'; serverTime: string }
+  | { type: 'hello-ack'; serverTime: string; iceServers?: IceServerInfo[] }
   | { type: 'ping' }
   | { type: 'command'; id: string; command: string; payload?: unknown }
   | {

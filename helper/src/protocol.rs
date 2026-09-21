@@ -85,12 +85,42 @@ pub struct StartPayload {
     pub viewer_count: Option<u32>,
 }
 
+/// Mirrors `IceServerInfo` from the shared protocol: `urls` may be a single
+/// string or an array. `username`/`credential` are only present for TURN
+/// servers (used by later milestones).
+#[derive(Debug, Clone, Deserialize)]
+pub struct IceServer {
+    pub urls: Json,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub credential: Option<String>,
+}
+
+impl IceServer {
+    /// Flatten `urls` (string or list of strings) into a Vec of URL strings.
+    pub fn stun_urls(&self) -> Vec<String> {
+        match &self.urls {
+            Json::Array(items) => items
+                .iter()
+                .filter_map(|u| u.as_str().map(String::from))
+                .collect(),
+            Json::String(single) => vec![single.clone()],
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// Server -> helper.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Server {
     #[serde(rename_all = "camelCase")]
-    HelloAck { server_time: String },
+    HelloAck {
+        server_time: String,
+        #[serde(default)]
+        ice_servers: Option<Vec<IceServer>>,
+    },
     Ping,
     Command {
         id: String,

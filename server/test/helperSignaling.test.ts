@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createRoom } from '../src/store';
 import { handleSignal, joinSignaling, leaveSignaling, type SignalingSocket } from '../src/signaling';
-import { attachHelperToRoom, helperSignalingSocket } from '../src/helperSignaling';
+import { attachHelperToRoom, helloAck, helperSignalingSocket } from '../src/helperSignaling';
 import type { PublicUser, ServerHelperMessage, ServerSignal } from '@golive/shared';
 
 const HOST: PublicUser = { id: 'host-1', username: 'Hosti', avatar: null };
@@ -25,6 +25,19 @@ function socket(id: string): SignalingSocket & { sent: ServerSignal[] } {
 }
 
 describe('helper-as-host signaling (over /ws/helper)', () => {
+  test('hello-ack carries the ICE server list (STUN; TURN when configured)', () => {
+    const ack = helloAck();
+    expect(ack).toMatchObject({ type: 'hello-ack' });
+    expect(Array.isArray(ack.iceServers)).toBe(true);
+    expect((ack.iceServers ?? []).length).toBeGreaterThan(0);
+    // STUN entries appear as url strings; at least one Google STUN by default.
+    const stunUrls = (ack.iceServers ?? []).flatMap((s) =>
+      Array.isArray(s.urls) ? s.urls : [s.urls],
+    );
+    expect(stunUrls.length).toBeGreaterThan(0);
+    expect(stunUrls.some((u) => u.startsWith('stun:'))).toBe(true);
+  });
+
   test('attach-acks with viewer count; viewers appear as peer-joined', () => {
     const room = createRoom(HOST);
     const helper = helperWire('helper-1');

@@ -12,6 +12,7 @@
 
 mod pipeline;
 mod protocol;
+mod stun;
 mod ws;
 
 use std::collections::HashMap;
@@ -52,6 +53,20 @@ impl RunState {
 struct ViewerState {
     /// Whether we already sent an SDP offer for this viewer.
     offer_sent: bool,
+    /// Last observed webrtcbin ICE connection state (change-log diagnostics).
+    ice_connection_state: i64,
+    /// Last observed webrtcbin ICE gathering state.
+    ice_gathering_state: i64,
+}
+
+impl ViewerState {
+    fn new() -> Self {
+        Self {
+            offer_sent: false,
+            ice_connection_state: -1,
+            ice_gathering_state: -1,
+        }
+    }
 }
 
 struct App {
@@ -62,6 +77,10 @@ struct App {
     current_room: Option<String>,
     /// Per-viewer negotiation state keyed by peer_id.
     viewers: HashMap<String, ViewerState>,
+    /// STUN URLs from the backend's `hello-ack` ICE server list.
+    stun_servers: Vec<String>,
+    /// The probed, reachable STUN server (pinned once per config).
+    chosen_stun: Option<String>,
     shutdown: bool,
 }
 
@@ -154,6 +173,8 @@ fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client
         session: None,
         current_room: None,
         viewers: HashMap::new(),
+        stun_servers: Vec::new(),
+        chosen_stun: None,
         shutdown: false,
     };
 
@@ -196,8 +217,26 @@ impl App {
 
     fn handle_server(&mut self, msg: Server) {
         match msg {
-            Server::HelloAck { server_time } => {
+            Server::HelloAck { server_time, ice_servers } => {
                 info!("handshake acknowledged (server time {server_time})");
+                // M6: multiple STUN servers. webrtcbin only exposes one
+                // stun-server slot, so collect the backend list and pin a
+                // reachable one (fastest responder) before any viewer connects.
+                self.stun_servers = ice_servers
+                    .unwrap_or_default()
+                    .iter()
+                    .flat_map(|s| s.stun_urls())
+                    .filter(|u| u.starts_with("stun:") || u.starts_with("stun://"))
+                    .collect();
+                if !self.stun_servers.is_empty() {
+                    let chosen = self.ensure_stun();
+                    info!("STUN candidates: {:?} -> chosen {chosen}", self.stun_servers);
+                } else {
+                    info!(
+                        "no STUN servers from backend; falling back to {}",
+                        pipeline::DEFAULT_STUN_SERVER
+                    );
+                }
             }
             Server::Ping => {
                 let state = self.state.as_str();
@@ -329,12 +368,27 @@ impl App {
 
     // -- stream lifecycle ----------------------------------------------------
 
+    /// Return the STUN server for the session: the fastest reachable responder
+    /// among the backend's list (probed once, cached per list), else the
+    /// hardcoded fallback. No config on disk or network dependency beyond the
+    /// probe itself.
+    fn ensure_stun(&mut self) -> String {
+        if let Some(chosen) = &self.chosen_stun {
+            return chosen.clone();
+        }
+        let chosen = stun::choose_server(&self.stun_servers)
+            .unwrap_or_else(|| pipeline::DEFAULT_STUN_SERVER.to_string());
+        self.chosen_stun = Some(chosen.clone());
+        chosen
+    }
+
     fn start_stream(&mut self, room_id: &str) {
         if self.session.is_some() {
             info!("restarting stream (room {room_id})");
             self.stop_stream();
         }
-        match pipeline::build(self.out.clone()) {
+        let stun = self.ensure_stun();
+        match pipeline::build(self.out.clone(), &stun) {
             Ok(session) => {
                 self.current_room = Some(room_id.to_string());
                 // Set room on any viewers that were queued before stream start.
@@ -371,7 +425,7 @@ impl App {
 
     fn add_viewer(&mut self, peer_id: &str) {
         self.viewers
-            .insert(peer_id.to_string(), ViewerState { offer_sent: false });
+            .insert(peer_id.to_string(), ViewerState::new());
 
         if let Some(ref mut s) = self.session {
             if let Err(e) = pipeline::add_viewer(s, peer_id) {
@@ -445,5 +499,71 @@ impl App {
         // This must be called from the main loop, not from inside create-offer's
         // promise callback, to avoid reentrancy in webrtcbin's state machine.
         pipeline::apply_pending_offers(session);
+
+        // ICE state change logging (diagnostics for failed direct connections:
+        // a session that never reaches `connected` leaves a trail of states).
+        for (peer_id, entry) in &session.viewers {
+            let Some(vs) = self.viewers.get_mut(peer_id.as_str()) else {
+                continue;
+            };
+            let conn = read_conn_state(&entry.webrtcbin);
+            if conn != vs.ice_connection_state {
+                vs.ice_connection_state = conn;
+                info!("viewer {peer_id}: ICE connection state = {}", ice_conn_name(conn));
+            }
+            let gather = read_gather_state(&entry.webrtcbin);
+            if gather != vs.ice_gathering_state {
+                vs.ice_gathering_state = gather;
+                info!("viewer {peer_id}: ICE gathering state = {}", ice_gather_name(gather));
+            }
+        }
+    }
+}
+
+/// Read the webrtcbin ICE connection state as i64 (-1 = unknown).
+fn read_conn_state(el: &gstreamer::Element) -> i64 {
+    use gstreamer_webrtc::WebRTCICEConnectionState as S;
+    match el.property::<S>("ice-connection-state") {
+        S::New => 0,
+        S::Checking => 1,
+        S::Connected => 2,
+        S::Completed => 3,
+        S::Failed => 4,
+        S::Disconnected => 5,
+        S::Closed => 6,
+        _ => -1,
+    }
+}
+
+/// Read the webrtcbin ICE gathering state as i64 (-1 = unknown).
+fn read_gather_state(el: &gstreamer::Element) -> i64 {
+    use gstreamer_webrtc::WebRTCICEGatheringState as S;
+    match el.property::<S>("ice-gathering-state") {
+        S::New => 0,
+        S::Gathering => 1,
+        S::Complete => 2,
+        _ => -1,
+    }
+}
+
+fn ice_conn_name(state: i64) -> &'static str {
+    match state {
+        0 => "new",
+        1 => "checking",
+        2 => "connected",
+        3 => "completed",
+        4 => "failed",
+        5 => "disconnected",
+        6 => "closed",
+        _ => "unknown",
+    }
+}
+
+fn ice_gather_name(state: i64) -> &'static str {
+    match state {
+        0 => "new",
+        1 => "gathering",
+        2 => "complete",
+        _ => "unknown",
     }
 }

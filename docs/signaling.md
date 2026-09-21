@@ -62,7 +62,7 @@ Server → client:
 | C→S | `hello` | `{ version }` – required handshake; presence registers only after this (bad/missing version → `bad_hello`; messages before `hello` → `hello_required`) |
 | C→S | `status` | `{ state: idle\|live\|error, detail? }` – also refreshes the heartbeat clock |
 | C→S | `ack` | `{ id, ok, state?, detail? }` – per-command acknowledgement, echoing the `id` from the server's `command` |
-| S→C | `hello-ack` | `{ serverTime }` |
+| S→C | `hello-ack` | `{ serverTime, iceServers? }` – `iceServers` is the global STUN list (TURN rides along when configured); the helper probes them and pins a reachable STUN server for its ICE agents (M6) |
 | S→C | `ping` | heartbeat; helpers must keep responding (e.g. `status`) or they're dropped as stale |
 | S→C | `command` | `{ id, command, payload? }` – started from `POST /api/helper/command` |
 

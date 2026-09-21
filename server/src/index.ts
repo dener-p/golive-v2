@@ -14,7 +14,7 @@ import {
   leaveSignaling,
   type SignalingSocket,
 } from './signaling';
-import { attachHelperToRoom, helperSignalingSocket } from './helperSignaling';
+import { attachHelperToRoom, helloAck, helperSignalingSocket } from './helperSignaling';
 import {
   registerHelper,
   unregisterHelper,
@@ -143,7 +143,7 @@ app.get(
               lastSeenAt: Date.now(),
             });
           }
-          const ack: ServerHelperMessage = { type: 'hello-ack', serverTime: new Date().toISOString() };
+          const ack: ServerHelperMessage = helloAck();
           ws.send(JSON.stringify(ack));
           return;
         }

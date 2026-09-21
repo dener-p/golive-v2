@@ -64,16 +64,23 @@ pub struct StreamSession {
     pub viewers: HashMap<String, ViewerEntry>,
     /// Monotonically increasing pad index for tee src pads.
     next_pad_idx: u32,
+    /// STUN server (chosen from the backend's list by `stun::choose_server`).
+    pub stun: String,
     pub out: tokio::sync::mpsc::UnboundedSender<Client>,
 }
 
-const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
+/// Fallback STUN used until the backend delivers its ICE server list (handshake
+/// ordering guarantees this virtually never happens in practice).
+pub const DEFAULT_STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 
 // ---------------------------------------------------------------------------
 // Build the base pipeline (up to tee — no webrtcbin yet)
 // ---------------------------------------------------------------------------
 
-pub fn build(out: tokio::sync::mpsc::UnboundedSender<Client>) -> Result<StreamSession> {
+pub fn build(
+    out: tokio::sync::mpsc::UnboundedSender<Client>,
+    stun_server: &str,
+) -> Result<StreamSession> {
     let desc = concat!(
         "d3d11screencapturesrc show-cursor=true ",
         "! d3d11convert ! video/x-raw(memory:D3D11Memory) ",
@@ -120,6 +127,7 @@ pub fn build(out: tokio::sync::mpsc::UnboundedSender<Client>) -> Result<StreamSe
         tee,
         viewers: HashMap::new(),
         next_pad_idx: 0,
+        stun: stun_server.to_string(),
         out,
     })
 }
@@ -161,7 +169,8 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .property_from_str("name", &format!("wc_{peer_id}"))
         .build()
         .context("failed to create webrtcbin")?;
-    webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
+    webrtcbin.set_property_from_str("stun-server", &session.stun);
+    info!("viewer {peer_id}: using STUN server {}", session.stun);
 
     // --- guarantee a media m-line in the offer ---------------------------------
     // Pre-configure a sendonly AV1 transceiver so the SDP offer always contains
@@ -256,6 +265,12 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         let (Some(mline), Some(candidate)) = (mline, candidate) else {
             return None;
         };
+        // GStreamer signals end-of-candidates with an empty candidate string;
+        // that is not a real ICE candidate and must not be forwarded.
+        if candidate.is_empty() {
+            info!("viewer candidate gathering finished for m-line {mline}");
+            return None;
+        }
         let (room_id, peer_id) = {
             let c = ctx_ice.lock().unwrap();
             (c.room_id.clone(), c.peer_id.clone())
@@ -524,11 +539,26 @@ mod tests {
     fn test_pipeline_offer() {
         gstreamer::init().unwrap();
         let (out, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = build(out).expect("build pipeline");
+        let mut session = build(out, DEFAULT_STUN_SERVER).expect("build pipeline");
         play(&session).expect("play pipeline");
         let peer_id = "test-viewer-1";
         add_viewer(&mut session, peer_id).expect("add viewer");
         set_viewer_room(&session, peer_id, "room-123");
+
+        // M6: the webrtcbin must be wired to the chosen STUN server (here the
+        // fallback default since no backend config exists in the unit test).
+        let entry = session.viewers.get(peer_id).unwrap();
+        let stun_val = entry
+            .webrtcbin
+            .property::<gstreamer::glib::Value>("stun-server");
+        let stun_set = match stun_val.get::<String>() {
+            Ok(s) => s,
+            Err(_) => format!("{stun_val:?}"),
+        };
+        assert!(
+            stun_set.contains(DEFAULT_STUN_SERVER),
+            "webrtcbin stun-server should be {DEFAULT_STUN_SERVER}, got {stun_set:?}"
+        );
 
         let src_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let enc_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

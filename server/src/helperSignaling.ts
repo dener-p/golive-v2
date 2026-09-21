@@ -1,5 +1,6 @@
 import type { ServerHelperMessage, ServerSignal } from '@golive/shared';
 import { joinSignaling, type SignalingSocket } from './signaling';
+import { iceServers } from './config';
 
 /**
  * The native helper acts as a room's *host* but only ever speaks on its
@@ -12,6 +13,17 @@ import { joinSignaling, type SignalingSocket } from './signaling';
  * - Room→helper events (viewer join/leave, viewer SDP/ICE) are dispatched to
  *   the helper as `ServerHelperMessage` frames.
  */
+
+/** The `hello-ack` frame: carries the global ICE server list (M6: multiple
+ * STUN servers instead of a helper-side hardcoded single endpoint). TURN, when
+ * configured globally, rides along for later milestones. */
+export function helloAck(): ServerHelperMessage {
+  return {
+    type: 'hello-ack',
+    serverTime: new Date().toISOString(),
+    iceServers: iceServers(),
+  };
+}
 
 /** Translate one room signaling frame into the helper vocabulary. */
 export function translateServerSignal(msg: ServerSignal): ServerHelperMessage | null {
