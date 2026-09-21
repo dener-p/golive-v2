@@ -53,6 +53,10 @@ export interface PeerStatsSnapshot {
   /** All gathered candidate types (local then remote), for path diagnostics. */
   localKinds: CandidateKind[];
   remoteKinds: CandidateKind[];
+  /** Host-type candidate IP addresses (own side) — used for CGNAT detection. */
+  localHostIps: string[];
+  /** Host-type candidate IP addresses (remote side). */
+  remoteHostIps: string[];
 }
 
 /** Carry-over state for byte-delta bitrate sampling. */
@@ -119,6 +123,8 @@ export async function samplePeerStats(
     remoteCandidate: null,
     localKinds: [],
     remoteKinds: [],
+    localHostIps: [],
+    remoteHostIps: [],
   };
 
   const entries = [...report.values()];
@@ -165,6 +171,8 @@ export async function samplePeerStats(
   // --- gathered candidate types (all, not just the selected pair) ----------
   snapshot.localKinds = collectCandidateKinds(entries, 'local-candidate');
   snapshot.remoteKinds = collectCandidateKinds(entries, 'remote-candidate');
+  snapshot.localHostIps = collectHostIps(entries, 'local-candidate');
+  snapshot.remoteHostIps = collectHostIps(entries, 'remote-candidate');
 
   // --- RTP stats (video) ---------------------------------------------------
   const rtp = entries
@@ -274,6 +282,19 @@ function collectCandidateKinds(entries: RTCStats[], type: 'local-candidate' | 'r
   return kinds;
 }
 
+/** Host-type candidate IP addresses of one side (mDNS `.local` names excluded). */
+function collectHostIps(entries: RTCStats[], type: 'local-candidate' | 'remote-candidate'): string[] {
+  const ips = new Set<string>();
+  for (const s of entries) {
+    if (s.type !== type) continue;
+    const c = s as IceStatsLike;
+    if (c.candidateType !== 'host') continue;
+    const ip = c.ip ?? c.address;
+    if (ip && !ip.endsWith('.local')) ips.add(ip);
+  }
+  return [...ips];
+}
+
 export function formatBytes(b: number): string {
   if (b >= 1_048_576) return `${(b / 1_048_576).toFixed(1)} MB`;
   if (b >= 1024) return `${Math.round(b / 1024)} KB`;
@@ -289,6 +310,30 @@ function kindsSummary(kinds: CandidateKind[]): string {
     .sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${k}${n > 1 ? `×${n}` : ''}`)
     .join(' ');
+}
+
+/** True for the carrier-grade NAT shared-address space 100.64.0.0/10. */
+export function isCgnatIp(ip: string): boolean {
+  const m = ip.match(/^(\d+)\.(\d+)\./);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a === 100 && b >= 64 && b <= 127;
+}
+
+/**
+ * When a participant sits on a carrier-CGNAT network (100.64.0.0/10), strict
+ * (endpoint-dependent/symmetric-style) CGNAT defeats WebRTC srflx traversal —
+ * a relay is genuinely required. Surface that honestly instead of a generic
+ * "no path".
+ */
+export function cgnatNote(s: PeerStatsSnapshot): string {
+  for (const ip of [...s.localHostIps, ...s.remoteHostIps]) {
+    if (isCgnatIp(ip)) {
+      return ` Carrier CGNAT (100.64/10) address ${ip} detected — this network typically blocks direct P2P; a TURN server would be required.`;
+    }
+  }
+  return '';
 }
 
 /**
@@ -308,7 +353,7 @@ export function stallDiagnosis(s: PeerStatsSnapshot): string | null {
       s.localCandidate && s.remoteCandidate
         ? `${s.localCandidate.kind} ⇄ ${s.remoteCandidate.kind}`
         : 'no pair';
-    return `NO PATH: ICE failed · ${pair} · local [${local}] · remote [${remote}]. No candidate pair connected — STUN/srflx missing on one side.`;
+    return `NO PATH: ICE failed · ${pair} · local [${local}] · remote [${remote}]. No candidate pair connected.${cgnatNote(s)}`;
   }
   if (s.connectionState !== 'connected') return null;
   const dec = s.framesDecoded ?? 0;
