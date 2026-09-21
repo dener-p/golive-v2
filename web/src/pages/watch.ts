@@ -83,12 +83,44 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   let wsClosed = false;
   let statsTimer: ReturnType<typeof setInterval> | null = null;
   let statsState: StatsState | undefined;
+  let mediaLive = false;
+  let mediaCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   const peerId = crypto.randomUUID();
 
   const stopStats = (): void => {
     if (statsTimer) clearInterval(statsTimer);
     statsTimer = null;
+  };
+
+  // "Receiving live media." is only claimed once the browser has actually
+  // presented a decoded video frame. A track event fires as soon as the
+  // transceiver is wired up, which on a stalled stream (the black-screen bug)
+  // happens with zero decodable frames — so the connection alone is not proof
+  // that media is live.
+  const markMediaLive = (): void => {
+    if (mediaLive) return;
+    const presented = video.getVideoPlaybackQuality?.()?.totalVideoFrames ?? 0;
+    if (presented > 0) {
+      mediaLive = true;
+      if (mediaCheckTimer) {
+        clearInterval(mediaCheckTimer);
+        mediaCheckTimer = null;
+      }
+      streamStatus.textContent = 'Receiving live media.';
+      streamStatus.className = 'statusline ok';
+    }
+  };
+
+  const startMediaCheck = (): void => {
+    if (mediaCheckTimer) return;
+    markMediaLive();
+    mediaCheckTimer = setInterval(markMediaLive, 1000);
+  };
+
+  const stopMediaCheck = (): void => {
+    if (mediaCheckTimer) clearInterval(mediaCheckTimer);
+    mediaCheckTimer = null;
   };
 
   const renderStats = async (): Promise<void> => {
@@ -116,6 +148,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
 
   const tearDown = (): void => {
     stopStats();
+    stopMediaCheck();
     pc?.close();
     pc = null;
   };
@@ -140,18 +173,23 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             void video.play().catch(() => {});
             video.classList.remove('hidden');
             waiting.style.display = 'none';
-            streamStatus.textContent = 'Receiving live media.';
-            streamStatus.className = 'statusline ok';
+            mediaLive = false; // re-verify this track actually renders frames
+            streamStatus.textContent = 'Connected to host — waiting for video…';
+            streamStatus.className = 'statusline muted';
+            startMediaCheck();
           },
           onStateChange: (state) => {
             connStatus.textContent = `Peer ${state}.`;
             connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
             if (state === 'connected') {
               startStats();
+              startMediaCheck();
             } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
               stopStats();
+              stopMediaCheck();
               statsLine.hidden = true;
               pathBadge.hidden = true;
+              if (state !== 'disconnected') mediaLive = false;
             }
           },
           onRetryNewPeer: (newPeer) => {

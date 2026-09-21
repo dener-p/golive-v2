@@ -163,39 +163,41 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         .context("failed to create webrtcbin")?;
     webrtcbin.set_property_from_str("stun-server", STUN_SERVER);
 
-    // Explicitly add an AV1 sendonly transceiver so webrtcbin knows the media format
-    // and direction immediately when creating the SDP offer (before data has flowed
-    // through the dynamic tee/queue).
-    let caps = "application/x-rtp,media=video,encoding-name=AV1,payload=96,clock-rate=90000"
+    // --- guarantee a media m-line in the offer ---------------------------------
+    // Pre-configure a sendonly AV1 transceiver so the SDP offer always contains
+    // a video m-line, even when a viewer joins before the first RTP packet with
+    // stream caps arrives (which otherwise yields an empty offer). The media
+    // branch links below to its own (second) transceiver via the requested sink
+    // pad; the browser keys on the sendrecv one. This keeps the offer valid in
+    // every environment while the deterministic tee-last linking handles the
+    // black-screen race.
+    let av1_rtp_caps = "application/x-rtp,media=video,encoding-name=AV1,payload=96,clock-rate=90000"
         .parse::<gstreamer::Caps>()
-        .context("invalid AV1 caps")?;
-    let _trans: Option<gstreamer_webrtc::WebRTCRTPTransceiver> = webrtcbin.emit_by_name(
-        "add-transceiver",
-        &[&gstreamer_webrtc::WebRTCRTPTransceiverDirection::Sendonly, &caps],
-    );
+        .context("invalid AV1 RTP caps")?;
+    {
+        let _trans: Option<gstreamer_webrtc::WebRTCRTPTransceiver> = webrtcbin.emit_by_name(
+            "add-transceiver",
+            &[&gstreamer_webrtc::WebRTCRTPTransceiverDirection::Sendonly, &av1_rtp_caps],
+        );
+    }
 
     session
         .pipeline
         .add_many([&queue, &webrtcbin])
         .context("cannot add elements to pipeline")?;
 
-    // --- link: tee_src_pad -> queue -> webrtcbin ------------------------------
-    // Use link_full with PadLinkCheck::NOTHING to bypass the caps compatibility
-    // check that fails when linking to a tee request pad in a PLAYING pipeline.
-    // GStreamer will negotiate caps at runtime when data starts flowing.
-    {
-        let q_sink = queue.static_pad("sink").context("queue has no sink")?;
-        tee_src_pad
-            .link_full(&q_sink, PadLinkCheck::empty())
-            .map_err(|e| anyhow!("could not link tee -> queue: {e}"))?;
-    }
+    // --- link: queue -> webrtcbin ----------------------------------------------
+    // Wire the branch between tee and webrtcbin while the tee is NOT yet
+    // linked, so the live tee never pushes into it during setup. Use link_full
+    // with empty PadLinkCheck to bypass the caps compatibility check that fails
+    // when linking to a request pad; caps are negotiated at runtime.
     {
         let q_src = queue.static_pad("src").context("queue has no src")?;
         let wb_sink_template = webrtcbin
             .pad_template("sink_%u")
             .context("webrtcbin has no sink_%u pad template")?;
         let wb_sink = webrtcbin
-            .request_pad(&wb_sink_template, None, None)
+            .request_pad(&wb_sink_template, None, Some(&av1_rtp_caps))
             .context("could not request webrtcbin sink pad")?;
         q_src
             .link_full(&wb_sink, PadLinkCheck::empty())
@@ -209,6 +211,35 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
     webrtcbin
         .sync_state_with_parent()
         .context("webrtcbin sync_state failed")?;
+
+    // --- wait until the branch is active ---------------------------------------
+    // The state change above is asynchronous; the tee is already PLAYING and
+    // pushes a copy of every buffer to each linked src pad. If the tee is
+    // linked before this branch is active, the first push returns
+    // GST_FLOW_FLUSHING, which propagates upstream and permanently stalls the
+    // whole pipeline (the intermittent black-screen bug: the viewer's branch
+    // receives zero buffers). Wait (non-blocking, short poll) for the queue's
+    // sink pad to become active, THEN link the tee pad.
+    {
+        let q_sink = queue.static_pad("sink").context("queue has no sink")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !q_sink.is_active() {
+            if std::time::Instant::now() >= deadline {
+                warn!("queue sink pad for {peer_id} did not become active in 1s");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    // --- link: tee_src_pad -> queue.sink (LAST) -------------------------------
+    // The branch is fully active now, so the live tee's push into it succeeds.
+    {
+        let q_sink = queue.static_pad("sink").context("queue has no sink")?;
+        tee_src_pad
+            .link_full(&q_sink, PadLinkCheck::empty())
+            .map_err(|e| anyhow!("could not link tee -> queue: {e}"))?;
+    }
 
     // --- per-viewer state -----------------------------------------------------
     let ctx = Arc::new(Mutex::new(ViewerContext {
