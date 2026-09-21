@@ -28,10 +28,50 @@ use crate::protocol::{Client, IceCandidate, SdpMessage};
 // Per-viewer context (written by the app loop, read by signal callbacks)
 // ---------------------------------------------------------------------------
 
+/// Per-viewer ICE candidate-type tallies (diagnostics: how many host/srflx/
+/// prflx/relay candidates were gathered locally vs received from the viewer).
+/// A session settled on `host ⇄ host` with no srflx from the viewer, or one
+/// that flapped between connected/completed, should be visible here.
+#[derive(Clone, Default)]
+pub struct IceDiag {
+    pub local: HashMap<String, usize>,
+    pub remote: HashMap<String, usize>,
+}
+
+impl IceDiag {
+    /// "host: 3, srflx: 1" summary of a tally map ("none" when empty).
+    pub fn tally(map: &HashMap<String, usize>) -> String {
+        if map.is_empty() {
+            return "none".into();
+        }
+        let mut parts: Vec<(&String, &usize)> = map.iter().collect();
+        parts.sort_by(|a, b| b.1.cmp(a.1));
+        parts
+            .iter()
+            .map(|(k, v)| format!("{k}: {v}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Parse the candidate type token ("host"/"srflx"/"prflx"/"relay"/…) out of an
+/// ICE candidate attribute string, e.g. "candidate:41 1 udp … typ host …".
+pub fn candidate_kind(candidate: &str) -> &str {
+    let mut tokens = candidate.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        if tok == "typ" {
+            return tokens.next().unwrap_or("unknown");
+        }
+    }
+    "unknown"
+}
+
 #[derive(Clone)]
 pub struct ViewerContext {
     pub room_id: String,
     pub peer_id: String,
+    /// Running ICE candidate-type tallies for this viewer.
+    pub ice: IceDiag,
 }
 
 pub struct ViewerEntry {
@@ -254,6 +294,7 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
     let ctx = Arc::new(Mutex::new(ViewerContext {
         room_id: String::new(), // filled in after attach-ack
         peer_id: peer_id.to_string(),
+        ice: IceDiag::default(),
     }));
 
     // --- webrtcbin signals (per-viewer) ---------------------------------------
@@ -268,17 +309,26 @@ pub fn add_viewer(session: &mut StreamSession, peer_id: &str) -> Result<()> {
         // GStreamer signals end-of-candidates with an empty candidate string;
         // that is not a real ICE candidate and must not be forwarded.
         if candidate.is_empty() {
-            info!("viewer candidate gathering finished for m-line {mline}");
+            let tally = {
+                let c = ctx_ice.lock().unwrap();
+                IceDiag::tally(&c.ice.local)
+            };
+            info!("viewer candidate gathering finished for m-line {mline} — local candidates [{tally}]");
             return None;
         }
         let (room_id, peer_id) = {
-            let c = ctx_ice.lock().unwrap();
+            let mut c = ctx_ice.lock().unwrap();
+            if c.room_id.is_empty() || c.peer_id.is_empty() {
+                warn!(
+                    "ICE candidate fired but dropped (room={:?} peer={:?}): {candidate}",
+                    c.room_id, c.peer_id
+                );
+                return None;
+            }
+            let kind = candidate_kind(&candidate);
+            *c.ice.local.entry(kind.to_string()).or_insert(0) += 1;
             (c.room_id.clone(), c.peer_id.clone())
         };
-        if room_id.is_empty() || peer_id.is_empty() {
-            warn!("ICE candidate fired but dropped (room={room_id:?} peer={peer_id:?}): {candidate}");
-            return None;
-        }
         info!("local ICE candidate (m={mline}) for viewer {peer_id}: {candidate}");
         let _ = out_ice.send(Client::RoomIce {
             room_id,

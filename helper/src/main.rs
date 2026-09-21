@@ -57,6 +57,9 @@ struct ViewerState {
     ice_connection_state: i64,
     /// Last observed webrtcbin ICE gathering state.
     ice_gathering_state: i64,
+    /// Set once ICE has settled (connected/completed/failed/disconnected) so the
+    /// per-viewer candidate summary is logged exactly once.
+    ice_settled: bool,
 }
 
 impl ViewerState {
@@ -65,6 +68,7 @@ impl ViewerState {
             offer_sent: false,
             ice_connection_state: -1,
             ice_gathering_state: -1,
+            ice_settled: false,
         }
     }
 }
@@ -89,7 +93,7 @@ fn main() -> Result<()> {
         .format_timestamp_millis()
         .init();
 
-    let base = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".into());
+    let base = env::var("BASE_URL").unwrap_or_else(|_| "https://api-golive.puhl.dev".into());
     let ws_url = format!("{}/ws/helper", base.replace("http", "ws").replace("https", "wss"));
 
 
@@ -310,6 +314,15 @@ impl App {
             } => {
                 info!("ICE candidate from viewer {peer_id}: {}", candidate.candidate);
                 if let Some(s) = &self.session {
+                    if let Some(entry) = s.viewers.get(&peer_id) {
+                        let kind = pipeline::candidate_kind(&candidate.candidate);
+                        let tally = {
+                            let mut ctx = entry.ctx.lock().unwrap();
+                            *ctx.ice.remote.entry(kind.to_string()).or_insert(0) += 1;
+                            pipeline::IceDiag::tally(&ctx.ice.remote)
+                        };
+                        info!("viewer {peer_id}: remote ICE candidate tally [{tally}]");
+                    }
                     pipeline::add_remote_candidate_for_viewer(
                         s,
                         &peer_id,
@@ -510,6 +523,16 @@ impl App {
             if conn != vs.ice_connection_state {
                 vs.ice_connection_state = conn;
                 info!("viewer {peer_id}: ICE connection state = {}", ice_conn_name(conn));
+                if !vs.ice_settled && matches!(conn, 2 | 3 | 4 | 5) {
+                    vs.ice_settled = true;
+                    let diag = entry.ctx.lock().unwrap().ice.clone();
+                    info!(
+                        "viewer {peer_id}: ICE settled ({}) — local candidates [{}], remote candidates [{}]",
+                        ice_conn_name(conn),
+                        pipeline::IceDiag::tally(&diag.local),
+                        pipeline::IceDiag::tally(&diag.remote),
+                    );
+                }
             }
             let gather = read_gather_state(&entry.webrtcbin);
             if gather != vs.ice_gathering_state {

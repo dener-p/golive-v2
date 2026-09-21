@@ -11,7 +11,7 @@ scope (connection diagnostics) is being finished now.
 | M3 | **TURN as optional host-provided recovery** — STUN first, retry with host-provided TURN when direct ICE fails, clear host-facing error if no TURN is configured, never an implicit GoLive relay | ❌ |
 | M4 | **Encode once, multiple viewers** — single AV1 encoder fanned into one peer connection per viewer (2–3 then ~10), upload/quality impact measured and surfaced | ❌ |
 | M5 | **Permissions and polish** — Discord OAuth identity + room ownership for **hosts only**, **anonymous viewers via the room link (no allowlist)**, host-provided TURN, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
-| M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ◑ (Phase 1: STUN plurality + probe, end-of-candidates filter, per-viewer ICE state diagnostics) |
+| M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ◑ (Phase 1: STUN plurality + probe, end-of-candidates filter, per-viewer ICE state diagnostics. Phase 2 in progress: watch-page stalled-media classification + AV1-decode probe, helper local/remote candidate tallies + settle summary) |
 
 ## M0 scope checklist
 

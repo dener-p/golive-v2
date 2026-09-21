@@ -1,7 +1,7 @@
 import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
 import { connectSignaling, type SignalingClient } from '../signaling';
 import { api } from '../api';
-import { samplePeerStats, summarizeStats, pathLabel, type StatsState } from '../stats';
+import { samplePeerStats, stallDiagnosis, summarizeStats, pathLabel, type StatsState } from '../stats';
 import {
   AV1_FIRST,
   createPeerWithRetry,
@@ -55,6 +55,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       <span class="statusline muted" id="conn-status"></span>
     </div>
     <div class="statusline muted" id="stats-line" hidden></div>
+    <div class="statusline error" id="diag-line" hidden></div>
   `;
 
   root.querySelector('#copy-watch-link')?.addEventListener('click', (e) => {
@@ -70,6 +71,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   const connStatus = qs(root, '#conn-status');
   const hostState = qs(root, '#host-state');
   const statsLine = qs(root, '#stats-line');
+  const diagLine = qs(root, '#diag-line') as HTMLDivElement;
   const pathBadge = qs(root, '#path-badge');
 
   const setWaiting = (text: string): void => {
@@ -85,6 +87,36 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   let statsState: StatsState | undefined;
   let mediaLive = false;
   let mediaCheckTimer: ReturnType<typeof setInterval> | null = null;
+  /** When the video track was wired up — used to give the decoder a grace period. */
+  let trackAt = 0;
+  let av1ProbeResult: string | null | undefined;
+
+  /** Best-effort AV1 decode capability probe, cached after the first call. */
+  const av1Probe = async (): Promise<string> => {
+    if (av1ProbeResult !== undefined) return av1ProbeResult ?? '';
+    try {
+      const mc = (navigator as Navigator & { mediaCapabilities?: MediaCapabilities })
+        .mediaCapabilities;
+      if (!mc?.decodingInfo) {
+        av1ProbeResult = null;
+        return '';
+      }
+      const res = await mc.decodingInfo({
+        type: 'file',
+        video: {
+          contentType: 'video/webm; codecs="av01.0.04M.08"',
+          width: 1280,
+          height: 720,
+          framerate: 30,
+          bitrate: 2_000_000,
+        },
+      });
+      av1ProbeResult = res.supported && res.smooth ? ' · AV1 decode OK' : ' · AV1 decode NO/slow';
+    } catch {
+      av1ProbeResult = null;
+    }
+    return av1ProbeResult ?? '';
+  };
 
   const peerId = crypto.randomUUID();
 
@@ -135,6 +167,19 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       }
       statsLine.hidden = false;
       statsLine.textContent = summarizeStats(snapshot);
+      if (mediaLive) {
+        diagLine.hidden = true;
+      } else if (trackAt > 0 && performance.now() - trackAt > 5_000) {
+        const stall = stallDiagnosis(snapshot);
+        if (stall) {
+          diagLine.hidden = false;
+          diagLine.textContent = `${stall}${await av1Probe()}`;
+        } else {
+          diagLine.hidden = true;
+        }
+      } else {
+        diagLine.hidden = true;
+      }
     } catch {
       /* transient */
     }
@@ -174,6 +219,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             video.classList.remove('hidden');
             waiting.style.display = 'none';
             mediaLive = false; // re-verify this track actually renders frames
+            trackAt = performance.now();
             streamStatus.textContent = 'Connected to host — waiting for video…';
             streamStatus.className = 'statusline muted';
             startMediaCheck();
