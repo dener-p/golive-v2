@@ -70,9 +70,13 @@ fn main() -> Result<()> {
         .format_timestamp_millis()
         .init();
 
-    let base = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8787".into());
+    let base = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".into());
     let ws_url = format!("{}/ws/helper", base.replace("http", "ws").replace("https", "wss"));
 
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
