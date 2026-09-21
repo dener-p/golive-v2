@@ -18,8 +18,8 @@ A low-latency, zero-cost, small-audience (≤10 viewers) live streaming tool.
   TURN, the connection stops with a clear error telling the host that a TURN server
   is required. There is **no fallback to a GoLive/shared TURN server**.
 
-- **Auth**: Discord OAuth — used both for room/signaling identity and as the identity
-  checked against a host's TURN allowlist.
+- **Auth**: Discord OAuth — used **for hosts only** (room ownership + helper control).
+  Viewers are anonymous: the room link is enough. There is no viewer allowlist.
 
 Codec scope for v1: **AV1 only**. No fallback codec, no transcoding.
 
@@ -61,7 +61,7 @@ flowchart LR
         Page["Viewer browser<br/>watch page"]
     end
 
-    Browser -- "start/stop, allowlist mgmt" --> Backend
+    Browser -- "start/stop, TURN config" --> Backend
     Helper -- "persistent outbound connection<br/>(status + relayed commands)" --> Backend
     Backend -- "auth, room join, TURN creds" --> Page
     Helper == "direct WebRTC media<br/>STUN, TURN fallback" ==> Page
@@ -99,7 +99,7 @@ No separate app to build here. The same frontend that serves `watch/{roomId}` ga
 1. After login, ask the shared backend whether a native helper is currently connected
    for this account (see §4.3 — the backend already knows, since the helper maintains a
    persistent connection to it).
-2. If connected, unlock host controls: pick capture source, manage the viewer allowlist,
+2. If connected, unlock host controls: pick capture source, configure TURN,
    start/stop, show the room link, live bandwidth/quality indicator.
 3. Every control action is a normal API call to the shared backend (same pattern already
    used for room state) — the backend forwards it to the helper over the existing
@@ -125,9 +125,8 @@ Responsibilities:
 5. For each peer connection, try public STUN first. If direct connectivity fails, use
    host-provided TURN credentials when configured. If no TURN is configured, surface a
    clear connection error to the host; never silently fall back to a GoLive/shared TURN.
-6. Enforce the viewer allowlist (reject peer connection attempts from IDs the host
-   hasn't approved) — the allowlist itself is managed from the host browser via the
-   backend, not locally.
+6. Accept any viewer that reaches the room: access is gated only by knowing the room
+   link — there is no viewer allowlist.
 
 Suggested implementation:
 
@@ -158,7 +157,8 @@ another host-controlled TURN provider. Do not build a shared GoLive TURN relay.
 Rules:
 
 1. TURN credentials are short-lived and only exposed to the participants that need them.
-2. The host may restrict TURN credential issuance using the viewer allowlist.
+2. TURN is configured per room; any viewer who has the room link may receive the room's
+   TURN credentials (no allowlist gating).
 3. If STUN succeeds, no TURN relay is used.
 4. If STUN fails and TURN is configured, retry ICE using the host's TURN server.
 5. If STUN fails and TURN is not configured, stop and show a clear error such as:
@@ -253,15 +253,16 @@ re-encoding, and the host UI reports the real upload/quality impact.
 
 ### Milestone 5 — Permissions and polish
 
-1. Discord OAuth identity and room ownership.
-2. Host-side viewer allowlist.
-3. TURN credential access restricted to permitted viewers when applicable.
+1. Discord OAuth identity and room ownership (hosts only; viewers need no account).
+2. Anonymous viewer join via the room link — no viewer allowlist.
+3. Host-provided TURN configuration for the room.
 4. Room link UX and viewer join flow.
 5. Helper reconnect/backoff handling.
 6. Capture-source picker and bandwidth/connection error indicators.
 
-**Exit condition:** the complete v1 flow works from login → helper online → host starts
-stream → viewer joins → direct WebRTC or host-provided TURN → stream ends.
+**Exit condition:** the complete v1 flow works from host login → helper online → host
+starts stream → viewer joins via the link → direct WebRTC or host-provided TURN →
+stream ends.
 
 ## 5.1 Implementation priority
 
@@ -280,7 +281,7 @@ Single encode → 2–3 viewers
         ↓
 Single encode → ~10 viewers
         ↓
-Discord / allowlist / UX polish
+Discord (hosts) / anonymous viewers / UX polish
 ```
 
 Do not start with TURN infrastructure, multi-viewer fan-out, or Discord permissions. Each
@@ -295,8 +296,8 @@ of those adds another failure domain before the native media path is proven.
   from becoming the new friction point that used to be "download an executable."
 - Exact current GStreamer fan-out element names — verify against `gst-plugins-rs` and
   core GStreamer docs at build time.
-- What happens when a viewer's ID isn't on the allowlist — silent room-join failure,
-  or an explicit "ask the host for access" flow?
+- How do we keep an anonymous room link from being trivially enumerated/abused, now that
+  the link alone grants access? (e.g. longer room ids; out of scope for v1.)
 - What's the actual bandwidth/quality ceiling to design the UI around, given the
   accepted host-upload-scales-with-viewers tradeoff?
 
@@ -311,3 +312,129 @@ of those adds another failure domain before the native media path is proven.
   becomes a real limiting factor).
 - No native GUI / Tauri wrapper, and no browser-to-localhost calls of any kind — host
   controls live entirely in the shared web frontend, relayed through the backend.
+
+### Milestone 6 — Maximize direct NAT traversal
+
+The goal of this milestone is to reduce how often a session needs TURN without changing the
+core WebRTC architecture. The helper remains responsible for the peer connection, while the
+backend continues to handle signaling only.
+
+1. **Use multiple public STUN servers** instead of depending on a single STUN endpoint.
+2. **Verify full trickle ICE support** end to end. Every local ICE candidate should be sent
+   immediately through signaling, and every remote candidate should be applied as soon as it
+   arrives.
+3. Keep `iceTransportPolicy` set to `all` so the ICE agent can try direct `host`, `srflx`,
+   and peer-reflexive paths before falling back to `relay` when TURN is available.
+4. Do not stop ICE candidate gathering/checks prematurely. Allow the ICE agent to continue
+   discovering and testing candidate pairs while the connection is being established.
+5. Preserve and expose all useful candidate types in diagnostics: `host`, `srflx`, `prflx`,
+   and `relay`.
+6. **Prefer IPv6 when a usable IPv6 path exists**, while retaining IPv4 candidates for normal
+   home networks.
+7. Add detailed ICE diagnostics for failed direct connections:
+   - local and remote candidate types
+   - candidate pair state
+   - selected candidate pair
+   - ICE connection state
+   - RTT
+   - packet loss
+   - bitrate
+   - connection establishment time
+8. Add a dedicated **NAT diagnostics/test mode** so the same helper and viewer can be tested
+   from different networks. Record whether each test succeeded directly, required TURN, or
+   failed without TURN.
+9. Investigate **UPnP and NAT-PMP/PCP support in the native helper** as an optional enhancement.
+   The helper may attempt router-assisted port mapping where supported, but this must remain an
+   optimization rather than a requirement. Do not assume a manually opened mapping is useful
+   unless the ICE stack is actually using the corresponding socket/port.
+10. Test representative difficult network combinations before considering this milestone done:
+    - same LAN
+    - two normal home routers
+    - symmetric/NAT-restricted combinations where possible
+    - double NAT
+    - CGNAT
+    - IPv6-capable networks
+    - networks where UDP is restricted
+
+**Exit condition:** direct P2P connectivity succeeds across a broader range of real-world NAT
+combinations, and every failure clearly identifies whether TURN is required or whether the
+connection failed for another reason. TURN remains the recovery path for networks where direct
+ICE cannot establish a usable route.
+
+### Milestone 7 — Connection diagnostics and NAT regression suite
+
+Turn the diagnostics from Milestone 6 into a repeatable test suite so future networking changes
+do not silently reduce connectivity.
+
+1. Add a host/viewer diagnostics panel showing the final transport path:
+   `direct host`, `direct srflx`, `direct prflx`, or `TURN relay`.
+2. Record ICE gathering time, ICE checking time, time to first decoded frame, selected candidate
+   pair, RTT, packet loss, bitrate, and disconnect reason.
+3. Store anonymized connection-test results for development/debugging if the project later has a
+   suitable telemetry path. Do not collect unnecessary network-identifying data.
+4. Build a small matrix of known test networks and repeat it after changes to the helper,
+   signaling, ICE configuration, or router/NAT handling.
+5. Make direct-vs-relayed behavior visible during development so TURN usage cannot accidentally
+   become the default.
+
+**Exit condition:** a networking change can be tested against the same NAT scenarios and the
+project can demonstrate whether direct connectivity improved, stayed the same, or regressed.
+
+### Milestone 8 — Optional native NAT-assistance experiments
+
+Only after the normal WebRTC ICE path is stable, evaluate additional native networking features.
+These are experiments, not requirements for v1.
+
+1. Prototype UPnP port mapping in the helper.
+2. Prototype NAT-PMP/PCP where supported by the router.
+3. Compare connection success rates with assistance disabled/enabled.
+4. Verify that any mapped port is actually represented by a usable ICE candidate and selected
+   by the ICE agent; a router mapping by itself is not enough.
+5. Keep the feature opt-in or safely degradable if router discovery/mapping fails.
+6. Do not replace WebRTC ICE with a custom NAT traversal protocol at this stage.
+
+**Exit condition:** any native NAT assistance is demonstrably useful on tested networks and does
+not make normal connections less reliable. If it provides little benefit, leave it out rather
+than adding another permanent dependency.
+
+## 5.2 Updated implementation priority
+
+After the existing v1 milestones, networking improvements should follow this order:
+
+```text
+Milestone 5 complete
+        ↓
+Multiple STUN servers + full trickle ICE verification
+        ↓
+IPv6 + complete ICE candidate diagnostics
+        ↓
+NAT diagnostics/test mode
+        ↓
+Real-world NAT regression testing
+        ↓
+Optional UPnP / NAT-PMP experiments
+        ↓
+Keep TURN as host-provided recovery for networks that still cannot connect directly
+```
+
+The project should **not** implement a custom Parsec-like UDP protocol or custom NAT traversal
+before exhausting the capabilities of WebRTC ICE. The native helper already removes many of the
+browser limitations, while WebRTC provides the mature ICE machinery needed for STUN, candidate
+pair checks, and TURN fallback.
+
+## 5.3 NAT traversal design rules
+
+These rules are intended to prevent later changes from accidentally making direct P2P less
+reliable:
+
+- Direct ICE is always attempted before TURN.
+- TURN is never a hidden GoLive/shared fallback.
+- All trickled ICE candidates must be forwarded in both directions.
+- Do not discard `host`, `srflx`, or `prflx` candidates just because a TURN candidate also exists.
+- Do not assume the first discovered candidate pair is the final or best path.
+- Do not disable IPv6 candidates globally.
+- NAT-assistance features such as UPnP/NAT-PMP are optional optimizations, never prerequisites.
+- A failed direct connection must produce diagnostics that explain what happened rather than only
+  reporting a generic "connection failed" message.
+- If direct connectivity is impossible and no host-provided TURN is configured, fail clearly and
+  tell the host what configuration is required.

@@ -1,7 +1,8 @@
 # Signaling protocol
 
 A shared backend relays everything; media flows **directly** between host and viewer over WebRTC.
-All signaling messages are JSON over WebSocket. Identities come from the session cookie.
+All signaling messages are JSON over WebSocket. **Hosts** authenticate with the session cookie;
+**viewers are anonymous** — no account or allowlist, the room link is the only requirement.
 
 ## Connections
 
@@ -11,9 +12,10 @@ All signaling messages are JSON over WebSocket. Identities come from the session
 | `GET /ws/helper` | native helper (or helper-stub) | Presence + control channel (commands from host browser) + room media signaling as host (M2+) |
 
 ### Cookie auth
-Clients authenticate with the `session` cookie. Native clients (non-browser) must set the
-`Cookie: session=…` header explicitly — e.g. the helper-stub logs in via `POST /auth/dev`
-and reads `Set-Cookie`.
+Hosts authenticate with the `session` cookie. Native clients (non-browser) must set the
+`Cookie: session=…` header explicitly — e.g. the helper logs in via `POST /auth/dev`
+and reads `Set-Cookie`. Viewers connect with no cookie; the server assigns them a
+per-connection guest id, which never grants host ownership.
 
 ## REST endpoints
 
@@ -25,11 +27,11 @@ and reads `Set-Cookie`.
 | `POST` | `/auth/logout` | session | – | `{ ok: true }` |
 | `POST` | `/auth/dev` | – (dev mode only) | – | `{ user }` dev login, sets session |
 | `GET` | `/api/meta` | – (public) | – | `{ name, auth: 'dev'\|'discord' }` |
-| `POST` | `/api/rooms` | session | `{}` | `201 { room: RoomInfo }` |
-| `GET` | `/api/rooms/{roomId}` | session | – | `{ room: RoomInfo }` or 404 |
-| `GET` | `/api/ice-servers` | session | – | `{ iceServers: RTCIceServer[] }` |
-| `GET` | `/api/helper/status` | session | – | `{ status: HelperStatus }` including `helperVersion` + `lastCommand` |
-| `POST` | `/api/helper/command` | session | `{ command, payload? }` | `{ delivered, id }`; 409 if helper offline |
+| `POST` | `/api/rooms` | host session | `{}` | `201 { room: RoomInfo }` |
+| `GET` | `/api/rooms/{roomId}` | **public** | – | `{ room: RoomInfo }` or 404 |
+| `GET` | `/api/ice-servers?roomId=…` | **public** | – | `{ iceServers: RTCIceServer[], turnConfigured }`; room TURN overrides the global fallback |
+| `GET` | `/api/helper/status` | host session | – | `{ status: HelperStatus }` including `helperVersion` + `lastCommand` |
+| `POST` | `/api/helper/command` | host session | `{ command, payload? }` | `{ delivered, id }`; 409 if helper offline |
 
 ## Room signaling messages (`/ws`)
 
@@ -37,7 +39,7 @@ Client → server:
 
 | Message | Payload | Notes |
 | --- | --- | --- |
-| `join` | `{ roomId, role, peerId }` | Sent on open. `peerId` is a client-generated id that addresses this connection (the host fans out one peer connection per viewer, keyed by `peerId`). Enforced: host must be room owner, one host per room. |
+| `join` | `{ roomId, role, peerId }` | Sent on open. `peerId` is a client-generated id that addresses this connection (the host fans out one peer connection per viewer, keyed by `peerId`). Enforced: host must be the signed-in room owner, one host per room. Viewers join anonymously. |
 | `sdp` | `{ roomId, sdp: { type, sdp } }` | Host→server→all viewers; viewer→server→host. |
 | `ice` | `{ roomId, candidate }` | Same routing as `sdp`. |
 | `leave` | – | Close the socket instead is also fine. |
@@ -50,7 +52,7 @@ Server → client:
 | `peer-joined` | `{ roomId, role, peerId }` | Host learns of a viewer; viewers learn of a host. |
 | `peer-left` | `{ roomId, role, peerId }` | Clean leave. |
 | `sdp` / `ice` | `{ from: role, peerId, … }` | Relayed payloads; `peerId` is the sender's connection id. |
-| `error` | `{ code, message }` | e.g. `room_not_found`, `not_room_host`, `host_already_connected`, `unauthorized`; server then closes. |
+| `error` | `{ code, message }` | e.g. `room_not_found`, `not_room_host`, `host_already_connected`, `bad_request`; server then closes. |
 
 ## Helper channel messages (`/ws/helper`)
 
@@ -123,4 +125,5 @@ TURN fallback. The final selected candidate type is logged so direct vs relayed 
 ## Future evolution (not M0)
 
 - Signal *renotification* / reconnect handling with thresholds (host-page UX, M5).
-- Allowlist validation and short-lived TURN credential issuance gated by viewer allowlist (M3/M5, host credential API).
+- Short-lived TURN credential issuance from the host credential API (M3/M5). TURN is
+  host-provided and per-room; viewer access is not gated by an allowlist.

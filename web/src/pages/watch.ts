@@ -1,7 +1,6 @@
 import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
 import { connectSignaling, type SignalingClient } from '../signaling';
 import { api } from '../api';
-import { ensureUser } from '../session';
 import { samplePeerStats, summarizeStats, pathLabel, type StatsState } from '../stats';
 import {
   AV1_FIRST,
@@ -11,7 +10,7 @@ import {
   preferCodecs,
   queueCandidate,
 } from '../webrtc';
-import { loginCard, nav, qs, esc, watchLink } from '../ui';
+import { nav, qs, esc, watchLink } from '../ui';
 
 export async function renderWatch(root: HTMLElement, roomId: string): Promise<void> {
   if (!roomId) {
@@ -19,24 +18,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     return;
   }
 
-  const user = await ensureUser();
-  const meta = await api.meta();
-
-  if (!user) {
-    root.innerHTML = `
-      ${nav()}
-      <h1>Watch ${esc(roomId)}</h1>
-      <p class="subtitle">Sign in to join this room.</p>`;
-    root.appendChild(loginCard(meta.auth));
-    root.querySelector('#dev-login')?.addEventListener('click', async () => {
-      const { devLogin } = await import('../session');
-      await devLogin();
-      void renderWatch(root, roomId);
-    });
-    return;
-  }
-
-  // Validate the room exists before opening a socket.
+  // Watching needs no login: validate the room exists before opening a socket.
   try {
     await api.getRoom(roomId);
   } catch {
@@ -44,8 +26,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       ${nav()}
       <div class="card">
         <h2>Room not found</h2>
-        <p class="muted">“${esc(roomId)}” doesn’t exist (or you’re signed in as the wrong account).
-        Ask the host for the correct link.</p>
+        <p class="muted">“${esc(roomId)}” doesn’t exist. Ask the host for the correct link.</p>
         <a class="btn" href="#/">Home</a>
       </div>`;
     return;

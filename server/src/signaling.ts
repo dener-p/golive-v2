@@ -6,7 +6,7 @@ import type {
   ServerSignal,
   SdpMessage,
 } from '@golive/shared';
-import { getRoom, isViewerAllowed } from './store';
+import { getRoom } from './store';
 
 /** Minimal socket surface so the module stays testable without a real WS. */
 export interface SignalingSocket {
@@ -66,7 +66,7 @@ export function joinSignaling(
     return {
       ok: false,
       code: 'not_room_host',
-      message: 'Only the room owner can connect as host',
+      message: 'Sign in as the room owner to connect as host',
     };
   }
   if (role === 'host' && membersOf(room.roomId).some((m) => m.role === 'host')) {
@@ -76,14 +76,7 @@ export function joinSignaling(
       message: 'A host is already connected to this room',
     };
   }
-  // Viewer allowlist check
-  if (role === 'viewer' && !isViewerAllowed(room.roomId, userId)) {
-    return {
-      ok: false,
-      code: 'not_allowed',
-      message: 'You are not on the allowlist for this room',
-    };
-  }
+  // Viewers are anonymous: the room link is the only requirement (no allowlist).
 
   // Replace any stale registration for the same socket id.
   leaveSignaling(socket.id);

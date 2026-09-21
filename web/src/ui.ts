@@ -30,8 +30,8 @@ export function loginCard(metaAuth: string): HTMLElement {
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
-    <h2>Sign in</h2>
-    <p class="muted">Discord identity is used for rooms and (later) the viewer allowlist.</p>
+    <h2>Sign in to host</h2>
+    <p class="muted">Only hosts sign in — it identifies the room owner. Viewers just open the room link.</p>
     <div class="row">
       ${
         metaAuth === 'dev'

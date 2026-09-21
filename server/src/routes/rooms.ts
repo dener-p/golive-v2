@@ -4,6 +4,7 @@ import { createRoom, getRoom, toRoomInfo } from '../store';
 
 export const roomsApp = new Hono();
 
+// Hosting requires a signed-in owner; watching does not.
 roomsApp.post('/', (c) => {
   const user = requireUser(c);
   if (!user) return c.json({ error: 'unauthorized' }, 401);
@@ -11,6 +12,7 @@ roomsApp.post('/', (c) => {
   return c.json({ room: toRoomInfo(room) }, 201);
 });
 
+// Public: anonymous viewers validate the room before opening a socket.
 roomsApp.get('/:roomId', (c) => {
   const room = getRoom(c.req.param('roomId'));
   if (!room) return c.json({ error: 'room_not_found' }, 404);

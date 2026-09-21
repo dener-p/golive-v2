@@ -10,7 +10,7 @@ scope (connection diagnostics) is being finished now.
 | M2 | **Native AV1 + one viewer** — Windows screen capture, GStreamer → AV1 (hardware encoder preferred, `svtav1enc` fallback), one real-time stream, one WebRTC peer to one Chromium viewer, STUN first, CPU/GPU measured | ❌ |
 | M3 | **TURN as optional host-provided recovery** — STUN first, retry with host-provided TURN when direct ICE fails, clear host-facing error if no TURN is configured, never an implicit GoLive relay | ❌ |
 | M4 | **Encode once, multiple viewers** — single AV1 encoder fanned into one peer connection per viewer (2–3 then ~10), upload/quality impact measured and surfaced | ❌ |
-| M5 | **Permissions and polish** — Discord OAuth identity + room ownership, viewer allowlist, TURN restricted to allowed viewers, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
+| M5 | **Permissions and polish** — Discord OAuth identity + room ownership for **hosts only**, **anonymous viewers via the room link (no allowlist)**, host-provided TURN, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
 
 ## M0 scope checklist
 

@@ -45,6 +45,10 @@ app.get(
   upgradeWebSocket((c) => {
     const user = userFromCookieHeader(c.req.header('cookie'));
     const connId = crypto.randomUUID();
+    // Viewers are anonymous — only hosting requires a signed-in room owner.
+    // Anonymous connections get a per-connection guest id so the signaling
+    // layer can still address them; it never grants host ownership.
+    const userId = user?.id ?? `guest-${connId}`;
 
     const fail = (
       ws: { send(data: string): void | Promise<void>; close(code?: number, reason?: string): void },
@@ -57,12 +61,7 @@ app.get(
     };
 
     return {
-      onOpen(_evt, ws) {
-        if (!user) fail(ws, 'unauthorized', 'Sign in first to use signaling');
-      },
       onMessage(evt, ws) {
-        if (!user) return;
-
         let msg: ClientSignal;
         try {
           msg = JSON.parse(String(evt.data)) as ClientSignal;
@@ -81,7 +80,7 @@ app.get(
             return;
           }
           const peerId = msg.peerId?.trim() || connId;
-          const result = joinSignaling(socket, roomId, role, user.id, peerId);
+          const result = joinSignaling(socket, roomId, role, userId, peerId);
           if (!result.ok) {
             fail(ws, result.code, result.message);
             return;
@@ -290,7 +289,9 @@ setInterval(() => {
 
 const server = Bun.serve({ port: config.port, fetch: app.fetch, websocket });
 console.log(`[golive] signaling backend on ${config.baseUrl}`);
-console.log(`[golive] auth mode: ${isDevAuth ? 'DEV (instant login as Dev User)' : 'Discord OAuth'}`);
+console.log(
+  `[golive] host auth: ${isDevAuth ? 'DEV (instant login as Dev User)' : 'Discord OAuth'} — viewers need no login`,
+);
 if (config.turn) console.log('[golive] TURN configured — ice-servers will include it');
 
 process.on('SIGINT', () => server.stop(true));

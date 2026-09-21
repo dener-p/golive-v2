@@ -74,6 +74,13 @@ describe('signaling', () => {
     expect(host.sent).toContainEqual({ type: 'ice', roomId: room.roomId, from: 'viewer', peerId: 'vA', candidate });
   });
 
+  test('any viewer may join without being on a list (no allowlist)', () => {
+    const room = createRoom(HOST);
+    const guest = socket('guest-1');
+    // Guest ids are what anonymous viewers get; they join like anyone else.
+    expect(joinSignaling(guest, room.roomId, 'viewer', 'guest-abc').ok).toBe(true);
+  });
+
   test('enforces role rules', () => {
     const room = createRoom(HOST);
 

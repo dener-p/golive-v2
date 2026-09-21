@@ -119,7 +119,6 @@ export type ServerErrorCode =
   | 'room_not_found'
   | 'not_room_host'
   | 'host_already_connected'
-  | 'not_allowed'
   | 'bad_request';
 
 // ---------------------------------------------------------------------------

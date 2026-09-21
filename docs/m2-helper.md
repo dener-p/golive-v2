@@ -58,4 +58,4 @@ Environment: dev-auth cookie via `POST /auth/dev` (like helper-stub), or a real
 
 ## Out of scope for M2
 
-- TURN (M3), fan-out > 1 viewer (M4), Discord/allowlist/UX polish (M5).
+- TURN (M3), fan-out > 1 viewer (M4), host login/UX polish (M5).

@@ -6,7 +6,7 @@ Low-latency, zero-cost, small-audience (≤10 viewers) live streaming. **AV1 onl
 - **Host UI**: the *same* frontend in "host mode", unlocked when a native helper is present.
 - **Native helper**: headless process doing capture + a single AV1 encode, fanned out to each viewer over WebRTC mesh (one upload per viewer by design — no SFU).
 - **Transport**: WebRTC mesh with STUN first, TURN (host-provided credentials) as fallback.
-- **Auth**: Discord OAuth for identities and TURN-allowlist checks.
+- **Auth**: Discord OAuth **for hosts only** (room ownership + helper control). Viewers need no account — the room link is enough; there is no viewer allowlist.
 
 Full design in [`project.md`](./project.md). Milestone plan in [`docs/milestones.md`](./docs/milestones.md), signaling protocol in [`docs/signaling.md`](./docs/signaling.md).
 
@@ -31,7 +31,7 @@ bun run dev               # signaling backend on :8787, frontend on :5173
 
 Then open http://localhost:5173:
 
-1. **Log in** — dev-auth mode (no Discord config) logs you in instantly as "Dev User".
+1. **Log in (hosts only)** — dev-auth mode (no Discord config) logs you in instantly as "Dev User". Viewers never log in.
 2. **Create a room** from the landing page, then open the host page link.
 3. **Host test-connect** — on the host page, click *Start test broadcast* (browser-emulated host: animated canvas stream). This proves the SDP/ICE relay before any native code.
 4. **Watch** — open the `watch/{roomId}` link in a second tab/window to receive the stream (AV1 preferred when the browser supports it).

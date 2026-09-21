@@ -79,23 +79,4 @@ export const api = {
       body: JSON.stringify(config),
     });
   },
-  getAllowlist(roomId: string): Promise<{ allowlist: string[]; open: boolean }> {
-    return request(`/api/rooms/${encodeURIComponent(roomId)}/allowlist`);
-  },
-  addToAllowlist(roomId: string, viewerId: string): Promise<{ ok: boolean; allowlist: string[] }> {
-    return request(`/api/rooms/${encodeURIComponent(roomId)}/allowlist`, {
-      method: 'POST',
-      body: JSON.stringify({ viewerId }),
-    });
-  },
-  removeFromAllowlist(roomId: string, viewerId: string): Promise<{ ok: boolean; allowlist: string[] }> {
-    return request(`/api/rooms/${encodeURIComponent(roomId)}/allowlist/${encodeURIComponent(viewerId)}`, {
-      method: 'DELETE',
-    });
-  },
-  clearAllowlist(roomId: string): Promise<{ ok: boolean; allowlist: string[] }> {
-    return request(`/api/rooms/${encodeURIComponent(roomId)}/allowlist/clear`, {
-      method: 'POST',
-    });
-  },
 };

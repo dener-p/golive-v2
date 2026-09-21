@@ -1,5 +1,5 @@
 import { api } from '../api';
-import { currentUser, devLogin, ensureUser, setUser } from '../session';
+import { devLogin, ensureUser, setUser } from '../session';
 import { nav, qs, esc, watchLink } from '../ui';
 
 export async function renderHome(root: HTMLElement): Promise<void> {
@@ -20,7 +20,7 @@ export async function renderHome(root: HTMLElement): Promise<void> {
               <span class="muted mono">(${esc(user.id)})</span></span>
               <button id="logout" class="small">Sign out</button>
             </div>`
-          : `<div class="muted">Sign in to create or join rooms.</div>
+          : `<div class="muted">Sign in to host a room. Watching a room needs no account — just the link.</div>
              <div class="row">
                ${
                  meta.auth === 'dev'
@@ -35,8 +35,8 @@ export async function renderHome(root: HTMLElement): Promise<void> {
       user
         ? `
     <div class="card">
-      <h2>Create a room</h2>
-      <p class="muted">A room is owned by you; only you can connect as its host.</p>
+      <h2>Host a room</h2>
+      <p class="muted">A room is owned by you; only you can connect as its host. Viewers just need the link.</p>
       <button id="create-room" class="primary">Create room</button>
       <div class="statusline muted" id="create-status"></div>
     </div>`

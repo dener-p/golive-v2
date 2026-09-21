@@ -3,16 +3,7 @@ import type { CommandRequest, TurnConfigRequest } from '@golive/shared';
 import { requireUser } from '../http';
 import { helperStatus, sendCommand } from '../helperRegistry';
 import { iceServers, isDevAuth, config } from '../config';
-import {
-  getRoom,
-  getRoomTurn,
-  setRoomTurn,
-  isViewerAllowed,
-  addToAllowlist,
-  removeFromAllowlist,
-  getAllowlist,
-  clearAllowlist,
-} from '../store';
+import { getRoom, getRoomTurn, setRoomTurn } from '../store';
 
 export const apiApp = new Hono();
 
@@ -20,28 +11,21 @@ apiApp.get('/meta', (c) =>
   c.json({ name: 'golive', auth: isDevAuth ? 'dev' : 'discord' }),
 );
 
+// Public: viewers are anonymous, so ICE config is not gated by a session.
+// A room's host-provided TURN, when configured, overrides the global fallback.
 apiApp.get('/ice-servers', (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
   const roomId = c.req.query('roomId');
   let servers = iceServers();
   let turnConfigured = !!config.turn;
 
-  // If a roomId is provided, include room-specific TURN if available
   if (roomId) {
     const roomTurn = getRoomTurn(roomId);
     if (roomTurn) {
-      // Check if this viewer is allowed (open room or on allowlist)
-      const allowed = isViewerAllowed(roomId, user.id);
-      if (allowed) {
-        // Room-specific TURN overrides global TURN
-        servers = [
-          ...config.stunServers.map((url) => ({ urls: url })),
-          { urls: roomTurn.urls, username: roomTurn.username, credential: roomTurn.credential },
-        ];
-        turnConfigured = true;
-      }
-      // If not allowed, they only get STUN (no TURN)
+      servers = [
+        ...config.stunServers.map((url) => ({ urls: url })),
+        { urls: roomTurn.urls, username: roomTurn.username, credential: roomTurn.credential },
+      ];
+      turnConfigured = true;
     }
   }
 
@@ -88,72 +72,8 @@ apiApp.post('/rooms/:roomId/turn', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Viewer allowlist
+// Helper presence + control relay (host-only; the helper is the room host)
 // ---------------------------------------------------------------------------
-
-apiApp.get('/rooms/:roomId/allowlist', (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
-
-  const roomId = c.req.param('roomId');
-  const room = getRoom(roomId);
-  if (!room) return c.json({ error: 'room_not_found' }, 404);
-  if (room.hostId !== user.id) return c.json({ error: 'not_room_host' }, 403);
-
-  return c.json({ allowlist: getAllowlist(roomId), open: room.allowlist.size === 0 });
-});
-
-apiApp.post('/rooms/:roomId/allowlist', async (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
-
-  const roomId = c.req.param('roomId');
-  const room = getRoom(roomId);
-  if (!room) return c.json({ error: 'room_not_found' }, 404);
-  if (room.hostId !== user.id) return c.json({ error: 'not_room_host' }, 403);
-
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'bad_request' }, 400);
-  }
-
-  const { viewerId } = (body ?? {}) as { viewerId?: string };
-  if (!viewerId || typeof viewerId !== 'string') {
-    return c.json({ error: 'missing_viewerId' }, 400);
-  }
-
-  addToAllowlist(roomId, viewerId.trim());
-  return c.json({ ok: true, allowlist: getAllowlist(roomId) });
-});
-
-apiApp.delete('/rooms/:roomId/allowlist/:viewerId', (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
-
-  const roomId = c.req.param('roomId');
-  const viewerId = c.req.param('viewerId');
-  const room = getRoom(roomId);
-  if (!room) return c.json({ error: 'room_not_found' }, 404);
-  if (room.hostId !== user.id) return c.json({ error: 'not_room_host' }, 403);
-
-  removeFromAllowlist(roomId, viewerId);
-  return c.json({ ok: true, allowlist: getAllowlist(roomId) });
-});
-
-apiApp.post('/rooms/:roomId/allowlist/clear', (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
-
-  const roomId = c.req.param('roomId');
-  const room = getRoom(roomId);
-  if (!room) return c.json({ error: 'room_not_found' }, 404);
-  if (room.hostId !== user.id) return c.json({ error: 'not_room_host' }, 403);
-
-  clearAllowlist(roomId);
-  return c.json({ ok: true, allowlist: [] });
-});
 
 apiApp.get('/helper/status', (c) => {
   const user = requireUser(c);
