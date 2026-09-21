@@ -304,9 +304,10 @@ pub fn remove_viewer(session: &mut StreamSession, peer_id: &str) {
 // Per-viewer SDP / ICE
 // ---------------------------------------------------------------------------
 
-/// Create an offer for a specific viewer and ship it to the room.
-/// The offer is stored in `pending_offer` and will be applied via
-/// `set-local-description` on the next `apply_pending_offers` call.
+/// Create an offer for a specific viewer. The offer is stored in `pending_offer`
+/// and applied via `set-local-description` on the next `apply_pending_offers`
+/// call; the SDP is only sent to the viewer once that local description is in
+/// place (see `apply_pending_offers` for why the order matters).
 pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result<()> {
     let entry = session
         .viewers
@@ -321,7 +322,6 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
         return Err(anyhow!("viewer has no room attached"));
     }
 
-    let out = session.out.clone();
     let pending = entry.pending_offer.clone();
 
     let promise = gstreamer::Promise::with_change_func(move |res| {
@@ -343,21 +343,17 @@ pub fn create_offer_for_viewer(session: &StreamSession, peer_id: &str) -> Result
                 return;
             }
         };
-        let text = offer.sdp().to_string();
-        info!("offer ready for viewer {viewer_peer_id} — storing for deferred set-local-description");
+        info!("offer ready for viewer {viewer_peer_id} — deferring send until set-local-description");
 
         // Store the offer so apply_pending_offers can call set-local-description
         // from the main loop (avoiding reentrancy inside the create-offer callback).
+        //
+        // The SDP is intentionally NOT sent from here: it is sent only after the
+        // local description has been applied. Otherwise the viewer can answer
+        // before webrtcbin enters the `have-local-offer` state, and the answer is
+        // then rejected by set-remote-description — leaving the peer connection
+        // negotiated but with no media (black screen for the viewer).
         *pending.lock().unwrap() = Some(offer);
-
-        let _ = out.send(Client::RoomSdp {
-            room_id,
-            peer_id: viewer_peer_id,
-            sdp: SdpMessage {
-                sdp_type: "offer".into(),
-                sdp: text,
-            },
-        });
     });
 
     let options = gstreamer::Structure::new_empty("create-offer-options");
@@ -374,13 +370,35 @@ pub fn apply_pending_offers(session: &StreamSession) {
         let offer = entry.pending_offer.lock().unwrap().take();
         let Some(offer) = offer else { continue };
 
+        let (room_id, viewer_peer_id) = {
+            let c = entry.ctx.lock().unwrap();
+            (c.room_id.clone(), c.peer_id.clone())
+        };
+        let text = offer.sdp().to_string();
         info!("applying set-local-description for viewer {peer_id}");
         let webrtcbin = entry.webrtcbin.clone();
         let vp_id = peer_id.clone();
         let pending = entry.pending_promises.clone();
+        let out = session.out.clone();
         let promise = gstreamer::Promise::with_change_func(move |res| {
             match res {
-                Ok(_) => info!("set-local-description OK for viewer {vp_id}"),
+                Ok(_) => {
+                    info!("set-local-description OK for viewer {vp_id}");
+                    // webrtcbin is now in `have-local-offer`. Only now do we send
+                    // the offer, so the viewer's answer can never arrive before we
+                    // are ready to accept it.
+                    if !room_id.is_empty() {
+                        let _ = out.send(Client::RoomSdp {
+                            room_id: room_id.clone(),
+                            peer_id: viewer_peer_id.clone(),
+                            sdp: SdpMessage {
+                                sdp_type: "offer".into(),
+                                sdp: text.clone(),
+                            },
+                        });
+                        info!("offer sent for viewer {vp_id}");
+                    }
+                }
                 Err(e) => warn!("set-local-description error for viewer {vp_id}: {e:?}"),
             }
             // The promise is done for good (resolved/expired/interrupted);
@@ -574,21 +592,16 @@ mod tests {
 
         create_offer_for_viewer(&session, peer_id).expect("create offer");
 
-        // Iterate main context to process the promise
+        // Iterate main context to process the create-offer promise, which only
+        // stores the offer in `pending_offer` (nothing is sent yet).
         for _ in 0..100 {
             gstreamer::glib::MainContext::default().iteration(false);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        // Check if offer was sent
-        let msg = rx.try_recv().expect("should receive SDP offer");
-        match msg {
-            Client::RoomSdp { room_id, peer_id, sdp } => {
-                println!("Got SDP offer for room {room_id}, peer {peer_id}:\n{}", sdp.sdp);
-            }
-            other => panic!("Unexpected message: {other:?}"),
-        }
-
+        // Apply the offer locally. The SDP is only sent to the viewer once
+        // set-local-description succeeds, so the viewer's answer cannot race
+        // ahead of webrtcbin entering `have-local-offer`.
         apply_pending_offers(&session);
 
         for _ in 0..100 {
@@ -596,14 +609,20 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        // Check for ICE candidates
+        // Collect messages: expect the SDP offer (ICE candidates may interleave).
+        let mut got_offer = false;
         let mut ice_candidates = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             if let Client::RoomIce { candidate, .. } = &msg {
                 ice_candidates.push(candidate.clone());
             }
+            if let Client::RoomSdp { room_id, peer_id, sdp } = &msg {
+                println!("Got SDP offer for room {room_id}, peer {peer_id}:\n{}", sdp.sdp);
+                got_offer = true;
+            }
             println!("Got message from out channel: {msg:?}");
         }
+        assert!(got_offer, "should receive SDP offer");
         assert!(!ice_candidates.is_empty(), "Should have gathered ICE candidates");
 
         // Now test setting remote answer
