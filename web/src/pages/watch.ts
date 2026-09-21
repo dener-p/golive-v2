@@ -1,7 +1,7 @@
 import type { IceCandidateMessage, ServerSignal } from '@golive/shared';
 import { connectSignaling, type SignalingClient } from '../signaling';
 import { api } from '../api';
-import { samplePeerStats, stallDiagnosis, summarizeStats, pathLabel, type StatsState } from '../stats';
+import { samplePeerStats, stallDiagnosis, summarizeStats, pathInfo, type StatsState } from '../stats';
 import {
   AV1_FIRST,
   createPeerWithRetry,
@@ -89,6 +89,18 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   let mediaCheckTimer: ReturnType<typeof setInterval> | null = null;
   /** When the video track was wired up — used to give the decoder a grace period. */
   let trackAt = 0;
+  /** M7 timing metrics: answer (local description) set ≈ ICE gathering start. */
+  let tLocalDesc = 0;
+  /** M7 timing metrics: ICE gathering reported 'complete'. */
+  let tGatherComplete = 0;
+  /** M7 timing metrics: first 'checking' state. */
+  let tChecking = 0;
+  /** M7 timing metrics: first 'connected' state. */
+  let tConnected = 0;
+  /** M7 timing metrics: first terminal state after being connected (disconnect reason). */
+  let tTerminal = 0;
+  /** M7 timing metrics: first presented video frame. */
+  let tFirstFrame = 0;
   let av1ProbeResult: string | null | undefined;
 
   /** Best-effort AV1 decode capability probe, cached after the first call. */
@@ -135,6 +147,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     const presented = video.getVideoPlaybackQuality?.()?.totalVideoFrames ?? 0;
     if (presented > 0) {
       mediaLive = true;
+      if (!tFirstFrame) tFirstFrame = performance.now();
       if (mediaCheckTimer) {
         clearInterval(mediaCheckTimer);
         mediaCheckTimer = null;
@@ -162,11 +175,11 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       statsState = state;
       if (snapshot.path) {
         pathBadge.hidden = false;
-        pathBadge.textContent = pathLabel(snapshot.path);
+        pathBadge.textContent = pathInfo(snapshot);
         pathBadge.className = `badge ${snapshot.path === 'relayed' ? 'warn' : 'ok'}`;
       }
       statsLine.hidden = false;
-      statsLine.textContent = summarizeStats(snapshot);
+      statsLine.textContent = [timingSummary(), summarizeStats(snapshot)].filter(Boolean).join(' · ');
       const iceFailed = pc.connectionState === 'failed';
       if (mediaLive) {
         diagLine.hidden = true;
@@ -190,6 +203,31 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     if (statsTimer) return;
     void renderStats();
     statsTimer = setInterval(() => void renderStats(), 2000);
+  };
+
+  /** M7: connection-establishment timeline for the stats line. */
+  const timingSummary = (): string => {
+    const parts: string[] = [];
+    const gather =
+      tGatherComplete && tLocalDesc ? Math.round(tGatherComplete - tLocalDesc) : null;
+    const checkStart = tChecking || tLocalDesc || 0;
+    const checkEnd = tConnected || tTerminal;
+    const check = checkStart && checkEnd ? Math.round(Math.max(0, checkEnd - checkStart)) : null;
+    const first =
+      tFirstFrame ? Math.round(tFirstFrame - (trackAt || tLocalDesc || 0)) : null;
+    if (gather != null) parts.push(`gather ${gather}ms`);
+    if (check != null) parts.push(`check ${check}ms`);
+    if (first != null) parts.push(`first frame ${first}ms`);
+    return parts.join(' · ');
+  };
+
+  /** Record when ICE gathering completes (per peer, so retries are covered too). */
+  const attachGatheringListener = (p: RTCPeerConnection): void => {
+    p.addEventListener('icegatheringstatechange', () => {
+      if (p.iceGatheringState === 'complete' && !tGatherComplete) {
+        tGatherComplete = performance.now();
+      }
+    });
   };
 
   const tearDown = (): void => {
@@ -226,23 +264,33 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             startMediaCheck();
           },
           onStateChange: (state) => {
+            const now = performance.now();
+            if (state === 'connecting' && !tChecking) tChecking = now;
             connStatus.textContent = `Peer ${state}.`;
             connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
             if (state === 'connected') {
+              if (!tConnected) tConnected = now;
               startStats();
               startMediaCheck();
             } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
               stopStats();
               stopMediaCheck();
+              if (state === 'failed') void renderStats(); // render the NO PATH diagnosis once
               statsLine.hidden = true;
               pathBadge.hidden = true;
               if (state !== 'disconnected') mediaLive = false;
+              if (tConnected && !tTerminal) {
+                // disconnect reason: how long the session was up before dying
+                tTerminal = now;
+                connStatus.textContent = `Peer ${state} after ${((now - tConnected) / 1000).toFixed(1)}s.`;
+              }
             }
           },
           onRetryNewPeer: (newPeer) => {
             pc = newPeer;
             newPeer.addTransceiver('video', { direction: 'recvonly' });
             preferCodecs(newPeer, 'video', AV1_FIRST);
+            attachGatheringListener(newPeer);
           },
         },
         {
@@ -262,6 +310,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       // Recv-only video; AV1 preferred when available.
       newPc.addTransceiver('video', { direction: 'recvonly' });
       preferCodecs(newPc, 'video', AV1_FIRST);
+      attachGatheringListener(newPc);
       pc = newPc;
 
       // Store abort function for cleanup
@@ -283,6 +332,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       await peer.setRemoteDescription(sdp);
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
+      tLocalDesc = performance.now();
       if (peer.localDescription) {
         client.send({
           type: 'sdp',

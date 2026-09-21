@@ -60,6 +60,8 @@ struct ViewerState {
     /// Set once ICE has settled (connected/completed/failed/disconnected) so the
     /// per-viewer candidate summary is logged exactly once.
     ice_settled: bool,
+    /// When the viewer registered — used to time ICE settling (M7 metrics).
+    created_at: std::time::Instant,
 }
 
 impl ViewerState {
@@ -69,6 +71,7 @@ impl ViewerState {
             ice_connection_state: -1,
             ice_gathering_state: -1,
             ice_settled: false,
+            created_at: std::time::Instant::now(),
         }
     }
 }
@@ -527,8 +530,9 @@ impl App {
                     vs.ice_settled = true;
                     let diag = entry.ctx.lock().unwrap().ice.clone();
                     info!(
-                        "viewer {peer_id}: ICE settled ({}) — local candidates [{}], remote candidates [{}]",
+                        "viewer {peer_id}: ICE settled ({}) after {:.1}s — local candidates [{}], remote candidates [{}]",
                         ice_conn_name(conn),
+                        vs.created_at.elapsed().as_secs_f32(),
                         pipeline::IceDiag::tally(&diag.local),
                         pipeline::IceDiag::tally(&diag.remote),
                     );

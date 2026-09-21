@@ -11,7 +11,33 @@ scope (connection diagnostics) is being finished now.
 | M3 | **TURN as optional host-provided recovery** — STUN first, retry with host-provided TURN when direct ICE fails, clear host-facing error if no TURN is configured, never an implicit GoLive relay | ❌ |
 | M4 | **Encode once, multiple viewers** — single AV1 encoder fanned into one peer connection per viewer (2–3 then ~10), upload/quality impact measured and surfaced | ❌ |
 | M5 | **Permissions and polish** — Discord OAuth identity + room ownership for **hosts only**, **anonymous viewers via the room link (no allowlist)**, host-provided TURN, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
-| M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ◑ (Phase 1: STUN plurality + probe, end-of-candidates filter, per-viewer ICE state diagnostics. Phase 2 in progress: watch-page stalled-media classification + AV1-decode probe, helper local/remote candidate tallies + settle summary) |
+| M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ✅ (P2P proven across residential NATs; strict cellular CGNAT classified as TURN-required; IPv6 candidates gathered where available; UPnP/NAT-PMP deferred to M8) |
+| M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (started: granular path + viewer timing line + helper `settled after Ns` log; matrix runner + self-test mode next) |
+
+## M6 scope checklist
+
+- [x] Multiple public STUN servers — backend `iceServers` list → helper probes & pins a reachable one (`stun.rs choose_server`, verify-with-second-pin)
+- [x] Full trickle ICE end-to-end — every local candidate forwarded immediately through signaling; every remote candidate applied on arrival; end-of-candidates marker not treated as a candidate
+- [x] `iceTransportPolicy` stays default `all` (host/srflx/prflx before TURN)
+- [x] Gathering/checks never stopped prematurely while connecting
+- [x] Candidate types preserved & exposed in diagnostics — `host`/`srflx`/`prflx`/`relay` tallies (helper settle line + watch page)
+- [x] IPv6 — IPv6 candidates gathered & kept by default (`webrtcbin`); tested networks show the cellular path has no IPv6 (carrier 464XLAT/CGNAT), the home keeps both families. `webrtcbin` has no explicit preference knob; keeping candidates covers it
+- [x] Detailed diagnostics for failed direct connections — helper `ICE settled ({state}) after {N}s — local […], remote […]` + full state trail; watch-page `stallDiagnosis` buckets (failed / transport / decode), candidate-kind summary, AV1 decode probe, carrier-CGNAT (100.64/10) classification
+- [x] NAT test/record mode — folded into the M7 regression matrix below; each real-network test already recorded there
+- [ ] UPnP / NAT-PMP / PCP — deferred to M8 (optional host-side enhancement)
+
+**Validated networks (seeds for the M7 matrix):**
+
+| Network | Result | Path |
+| --- | --- | --- |
+| Helper host LAN (`repro.mjs` harness) | works | direct host |
+| Tailscale overlay (phone ⇄ PC on tailnet) | works | direct host (tailnet) |
+| Residential NAT ⇄ residential NAT (friend's PC, normal home router) | works | direct srflx |
+| Residential NAT ⇄ carrier CGNAT (Android Chrome, cellular, no IPv6) | fails — **TURN-required** | strict CGNAT blocks srflx; viewer host addr in 100.64.0.0/10 |
+
+**Exit condition:** P2P succeeds across the representative networks (LAN + two home routers),
+and every failure explicitly identifies whether TURN is required (CGNAT classification +
+transport/decode buckets). ✅
 
 ## M0 scope checklist
 

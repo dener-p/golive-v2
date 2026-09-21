@@ -89,6 +89,27 @@ export function pathLabel(path: PathKind): string {
 }
 
 /**
+ * Granular transport path for M7 diagnostics: `direct host`, `direct srflx`,
+ * `direct prflx`, or `TURN relay` (candidate type of the selected pair).
+ */
+export function pathInfo(snapshot: PeerStatsSnapshot): string {
+  switch (snapshot.candidateType) {
+    case 'host':
+      return 'direct host';
+    case 'srflx':
+      return 'direct srflx';
+    case 'prflx':
+      return 'direct prflx';
+    case 'relay':
+      return 'TURN relay';
+    case 'unknown':
+      return 'direct ?';
+    default:
+      return pathLabel(snapshot.path);
+  }
+}
+
+/**
  * Reduce a RTCStatsReport to a PeerStatsSnapshot.
  *
  * @param pc  the peer connection (used for connectionState)
@@ -247,10 +268,10 @@ export async function samplePeerStats(
   return { snapshot, state };
 }
 
-/** Single-line summary used by the host page test-broadcast card. */
+/** Single-line summary used by the host page test-broadcast card + viewer. */
 export function summarizeStats(snapshot: PeerStatsSnapshot): string {
   const parts: string[] = [];
-  const path = pathLabel(snapshot.path);
+  const path = pathInfo(snapshot);
   const rtt = snapshot.rttMs != null ? `${snapshot.rttMs}ms` : '—';
   const loss = snapshot.packetsLost != null ? `${snapshot.packetsLost} pkts` : '—';
   const br = snapshot.bitrateKbps != null ? `${formatKbps(snapshot.bitrateKbps)}` : '—';
