@@ -75,6 +75,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           <button id="cmd-start" class="primary" disabled>Start live</button>
           <button id="cmd-stop" class="danger" disabled>Stop live</button>
           <button id="cmd-nat-test" class="small" disabled>NAT self-test</button>
+          <button id="cmd-nat-map" class="small" disabled>NAT-map probe</button>
         </div>
         <div class="statusline muted" id="command-result"></div>
       </div>
@@ -136,6 +137,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     });
     root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
     root.querySelector('#cmd-nat-test')?.addEventListener('click', () => void sendCommand('nat-test'));
+    root.querySelector('#cmd-nat-map')?.addEventListener('click', () => void sendCommand('nat-map'));
 
     // TURN config
     root.querySelector('#turn-save')?.addEventListener('click', async () => {
@@ -228,6 +230,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         if (startBtn) startBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = false;
         if (natBtn) natBtn.disabled = false;
+        const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
+        if (mapBtn) mapBtn.disabled = false;
       } else {
         badge.textContent = 'helper offline';
         badge.className = 'badge warn';
@@ -236,6 +240,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         if (startBtn) startBtn.disabled = true;
         if (stopBtn) stopBtn.disabled = true;
         if (natBtn) natBtn.disabled = true;
+        const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
+        if (mapBtn) mapBtn.disabled = true;
       }
 
       // Report the ack for the command we sent (or the latest one from this helper).

@@ -10,6 +10,7 @@
 //! element to one `webrtcbin` per connected viewer.  Viewers join and leave
 //! dynamically; each gets its own SDP negotiation and ICE agent.
 
+mod natassist;
 mod pipeline;
 mod protocol;
 mod stun;
@@ -383,6 +384,16 @@ impl App {
                     true,
                     self.state.as_str(),
                     Some(result.detail),
+                ));
+            }
+            "nat-map" => {
+                let report = natassist::experiment();
+                info!("NAT assist experiment: {}", report);
+                let _ = self.out.send(Client::ack(
+                    id,
+                    true,
+                    self.state.as_str(),
+                    Some(report),
                 ));
             }
             other => {

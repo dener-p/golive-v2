@@ -74,3 +74,15 @@ The verdict line appears in `#command-result` on the host page and in the helper
 `NAT self-test: …`. Use it to sanity-check the *expected* row classification before
 recording a matrix row (e.g. confirm the helper side is not CGNAT before a
 residential-to-residential srflx run).
+
+## Router NAT-assistance probe (`nat-map`, M8 experiment)
+
+The **NAT-map probe** button (helper `nat-map` command) checks whether router-assisted port
+mapping could ever help this stack: SSDP UPnP IGD discovery, NAT-PMP probe against the
+gateway, and — if the router supports either — creates a UDP mapping for a local socket and
+verifies it with a same-socket STUN binding, then deletes it.
+
+Known verdict: `webrtcbin` has no source-port pinning, so libnice picks the ICE socket's
+ephemeral port itself; a router mapping for a fixed port can therefore never be the ICE
+candidate's port. The home router tested exposes neither UPnP nor NAT-PMP (probe ends with
+"nothing to map; srflx ICE already covers this network"). See `docs/milestones.md` M8.

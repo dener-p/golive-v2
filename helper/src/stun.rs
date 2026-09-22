@@ -54,7 +54,7 @@ fn parse_stun(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-fn build_binding_request(txid: &[u8; 12]) -> [u8; 20] {
+pub(crate) fn build_binding_request(txid: &[u8; 12]) -> [u8; 20] {
     let mut req = [0u8; 20];
     req[0..2].copy_from_slice(&STUN_BINDING_REQUEST.to_be_bytes());
     req[4..8].copy_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
@@ -221,7 +221,7 @@ pub struct NatTestResult {
 
 /// Fresh 12-byte transaction id, mangled with a probe sequence number so two
 /// queries on the same socket never reuse a transaction.
-fn new_txid(seq: u64) -> [u8; 12] {
+pub(crate) fn new_txid(seq: u64) -> [u8; 12] {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -317,7 +317,7 @@ fn decode_mapped_attr(t: u16, v: &[u8], txid: &[u8; 12]) -> Option<NatMapping> {
 
 /// Send one binding request on `sock` and return the first valid
 /// XOR-MAPPED-ADDRESS, or None after the probe timeout.
-fn query_mapped(
+pub(crate) fn query_mapped(
     sock: &UdpSocket,
     addr: std::net::SocketAddr,
     txid: &[u8; 12],

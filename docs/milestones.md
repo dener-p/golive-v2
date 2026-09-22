@@ -13,6 +13,7 @@ scope (connection diagnostics) is being finished now.
 | M5 | **Permissions and polish** — Discord OAuth identity + room ownership for **hosts only**, **anonymous viewers via the room link (no allowlist)**, host-provided TURN, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
 | M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ✅ (P2P proven across residential NATs; strict cellular CGNAT classified as TURN-required; IPv6 candidates gathered where available; UPnP/NAT-PMP deferred to M8) |
 | M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (working: granular path + timing metrics + matrix runner + LAN baseline + helper `nat-test` self-test; field re-tests pending) |
+| M8 | **Optional native NAT-assistance experiments** — probe & verify router-assisted port mapping (UPnP IGD / NAT-PMP) in the helper and decide whether it earns a permanent place | ◐ (experiment command `nat-map` + webrtcbin port-pinning verdict; see checklist below) |
 
 ## M6 scope checklist
 
@@ -98,6 +99,27 @@ Chromium viewer receives a stable live stream.
 
 **Exit condition:** the matrix re-runs green on the networks tested, and the host can
 see *why* their own network classifies the way it does (`nat-test`) before a viewer joins.
+
+## M8 scope checklist (optional native NAT-assistance experiments)
+
+Experiments only; `project.md` §5 exit condition explicitly allows "leave it out".
+
+- [x] `nat-map` helper command — **discovery + mapping + verification + cleanup**:
+  - SSDP `M-SEARCH` for UPnP IGD (ephemeral + 1900 source ports), device-description XML → `WANIPConnection`/`WANPPPConnection` service `controlURL`
+  - NAT-PMP probe (op 0) against gateway candidates — `ipconfig` (locale-independent), plus derived `.1`/`.254` from the local interface IP
+  - If supported: `AddPortMapping`/`DeletePortMapping` (SOAP) or NAT-PMP `MapUDP` (lease 3600, delete = lifetime 0), then **same-socket STUN** — does the srflx equal the mapped external ip:port?
+  - Runs opt-in (command), fully degradable; report via ack detail + host-page button `NAT-map probe`
+- [x] Port-pinning verdict (M8 #4): `webrtcbin` exposes **no source-port/port-range property** (verified with `gst-inspect-1.0`), so libnice always picks the ICE socket's ephemeral port — a router mapping for any other port can *never* become the srflx candidate on this stack
+- [x] Home-network live run: router offers **no** UPnP (0 SSDP IGD replies) and **no** NAT-PMP (26.0.0.1 / 192.168.2.1 / 192.168.2.254 unanswered) → "nothing to map; srflx ICE already covers this network"
+- [ ] PCP — same diagnostic path *where a router actually supports NAT-PMP*; home/PCP not probed (gateway silent on 5351)
+- [ ] Success-rate comparison with assistance disabled/enabled (needs a NAT-assist-capable network — e.g. friend's router when the field re-test is back on)
+  - Expected per the port-pinning verdict: even a working mapping won't be used by ICE, so no success-rate delta
+- [x] Unit tests (8 new): SSDP LOCATION parse, service/controlURL extraction, tag parsing, relative URL join, SOAP body + fault detection, NAT-PMP request build + probe/MapUDP response parse, HTTP body split — 18 total pass
+
+**Exit condition (project.md):** any native NAT assistance is demonstrably useful on tested
+networks and does not make normal connections less reliable; if little benefit, leave it out.
+Current evidence (no router support on the tested network + no ICE port-pinning on
+`webrtcbin`) points to **leave it out**; keep `nat-map` as an opt-in diagnostic.
 
 ## Notes for later milestones
 
