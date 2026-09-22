@@ -41,6 +41,14 @@ export interface HelperCommandResult {
   id?: string;
 }
 
+export interface HelperLatest {
+  available: boolean;
+  version?: string;
+  file?: string;
+  sha256?: string;
+  url?: string;
+}
+
 export const api = {
   meta(): Promise<MetaInfo> {
     return request('/api/meta');
@@ -62,6 +70,9 @@ export const api = {
   },
   helperStatus(): Promise<{ status: HelperStatus }> {
     return request('/api/helper/status');
+  },
+  helperLatest(): Promise<HelperLatest> {
+    return request('/api/helper/latest');
   },
   helperCommand(command: string, payload?: unknown): Promise<HelperCommandResult> {
     return request('/api/helper/command', {

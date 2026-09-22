@@ -236,6 +236,28 @@ function sendAttachError(ws: { send(data: string): void }, code: string, message
 const attachedRooms = new Map<string, string>();
 
 // ---------------------------------------------------------------------------
+// Helper binaries + metadata (published by tools/release/build.ps1)
+// ---------------------------------------------------------------------------
+
+const HELPER_DIR = resolve(import.meta.dir, '../public/helper');
+
+app.get('/helper/*', async (c) => {
+  const name = decodeURIComponent(c.req.path.slice('/helper/'.length));
+  if (
+    !name ||
+    name.includes('..') ||
+    name.includes('\\') ||
+    name.includes('/')
+  ) {
+    return c.notFound();
+  }
+  const file = Bun.file(resolve(HELPER_DIR, name));
+  if (!(await file.exists())) return c.notFound();
+  const type = name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+  return new Response(file, { headers: { 'Content-Type': type } });
+});
+
+// ---------------------------------------------------------------------------
 // Static web app (built output) with SPA fallback
 // ---------------------------------------------------------------------------
 

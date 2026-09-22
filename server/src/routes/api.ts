@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { resolve } from 'node:path';
 import type { CommandRequest, TurnConfigRequest } from '@golive/shared';
 import { requireUser } from '../http';
 import { helperStatus, sendCommand } from '../helperRegistry';
@@ -7,9 +8,53 @@ import { getRoom, getRoomTurn, setRoomTurn } from '../store';
 
 export const apiApp = new Hono();
 
+/** Directory the release script publishes helper binaries + latest.json into. */
+const HELPER_DIR = resolve(import.meta.dir, '../../public/helper');
+
 apiApp.get('/meta', (c) =>
   c.json({ name: 'golive', auth: isDevAuth ? 'dev' : 'discord' }),
 );
+
+// ---------------------------------------------------------------------------
+// Helper download (public — an end user with no helper is pointed here by the
+// host page; no session required, same as the viewer room link).
+// ---------------------------------------------------------------------------
+
+interface HelperMeta {
+  version: string;
+  file: string;
+  sha256: string;
+}
+
+async function helperMeta(): Promise<HelperMeta | null> {
+  const file = Bun.file(resolve(HELPER_DIR, 'latest.json'));
+  if (!(await file.exists())) return null;
+  try {
+    const meta = (await file.json()) as HelperMeta;
+    if (typeof meta?.version !== 'string' || typeof meta?.file !== 'string') return null;
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+apiApp.get('/helper/latest', async (c) => {
+  const meta = await helperMeta();
+  if (!meta) return c.json({ available: false });
+  return c.json({
+    available: true,
+    version: meta.version,
+    file: meta.file,
+    sha256: meta.sha256,
+    url: `/helper/${encodeURIComponent(meta.file)}`,
+  });
+});
+
+apiApp.get('/helper/download', async (c) => {
+  const meta = await helperMeta();
+  if (!meta) return c.json({ error: 'helper_not_published' }, 404);
+  return c.redirect(`/helper/${encodeURIComponent(meta.file)}`, 302);
+});
 
 // Public: viewers are anonymous, so ICE config is not gated by a session.
 // A room's host-provided TURN, when configured, overrides the global fallback.

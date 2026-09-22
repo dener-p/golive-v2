@@ -6,6 +6,8 @@ import { invalidateIceConfig } from '../webrtc';
 export async function renderHost(root: HTMLElement, query: URLSearchParams): Promise<void> {
   const user = await ensureUser();
   const meta = await api.meta();
+  /** Latest published helper (version + sha256) from the backend; null if unpublished. */
+  const latest = await api.helperLatest().catch(() => null);
 
   if (!user) {
     root.innerHTML = `
@@ -68,9 +70,10 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           <span class="muted" id="helper-last-seen"></span>
         </div>
         <p class="muted">
-          Run <code>cargo run</code> in <code>helper/</code> to start the native helper.
-          It captures your screen, encodes AV1, and streams to viewers through the backend.
+          The native helper captures your screen, encodes AV1, and streams to viewers through the backend.
+          It connects outward to the server — nothing runs on localhost.
         </p>
+        <div class="statusline" id="helper-dl"></div>
         <div class="row">
           <button id="cmd-start" class="primary" disabled>Start live</button>
           <button id="cmd-stop" class="danger" disabled>Stop live</button>
@@ -210,6 +213,37 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     void refreshHelper();
   };
 
+  /** Fill the download card / version hint under the helper badge. */
+  const fillHelperDl = (connected = false, helperVersion?: string | null): void => {
+    const dl = root.querySelector('#helper-dl');
+    if (!dl) return;
+    if (connected && latest?.available) {
+      const running = helperVersion ?? '?';
+      if (latest.version && running !== latest.version) {
+        dl.innerHTML = `helper v${esc(running)} — <a href="/api/helper/download">update available: v${esc(latest.version)}</a>`;
+        dl.className = 'statusline';
+      } else {
+        dl.textContent = `helper v${running} — up to date`;
+        dl.className = 'statusline muted';
+      }
+      return;
+    }
+    if (connected) {
+      dl.textContent = 'helper connected';
+      dl.className = 'statusline muted';
+      return;
+    }
+    if (latest?.available) {
+      const short = latest.sha256 ? latest.sha256.slice(0, 16) : '';
+      dl.innerHTML = `No helper running yet — <a class="btn small" href="/api/helper/download">Download helper v${esc(latest.version ?? '')}</a>
+        <span class="muted">sha256 ${esc(short)}… · download, run <code>golive-helper.exe</code>, then refresh this page</span>`;
+      dl.className = 'statusline';
+    } else {
+      dl.textContent = 'No helper is running. Build one from helper/ (cargo build --release) or ask the operator to publish a download.';
+      dl.className = 'statusline muted';
+    }
+  };
+
   const refreshHelper = async (): Promise<void> => {
     if (disposed) return;
     try {
@@ -232,6 +266,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         if (natBtn) natBtn.disabled = false;
         const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
         if (mapBtn) mapBtn.disabled = false;
+        fillHelperDl(true, status.helperVersion ? String(status.helperVersion) : undefined);
       } else {
         badge.textContent = 'helper offline';
         badge.className = 'badge warn';
@@ -242,6 +277,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         if (natBtn) natBtn.disabled = true;
         const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
         if (mapBtn) mapBtn.disabled = true;
+        fillHelperDl(false);
       }
 
       // Report the ack for the command we sent (or the latest one from this helper).
@@ -292,6 +328,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     }
   }
   render();
+  fillHelperDl(false);
   setRoomCreator();
   if (roomId) poll();
 

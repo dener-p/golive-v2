@@ -397,6 +397,49 @@ These are experiments, not requirements for v1.
 not make normal connections less reliable. If it provides little benefit, leave it out rather
 than adding another permanent dependency.
 
+### Milestone 9 — Distribution and production readiness
+
+Ship the working stream to end users without a dev setup: the operator runs the signaling
+backend on a small always-reachable box (initially the developer's notebook behind a
+`cloudflared` tunnel, per README), and hosts get the helper as a plain download that pairs
+itself.
+
+Locked-in decisions (general-use scope):
+
+- **One operator-hosted instance** for friends/family. A documented self-host path for
+  strangers is stretch, not required.
+- **Helper download is served by the backend** (`/api/helper/download` + `/api/helper/latest`)
+  and surfaced on the host page — no GitHub account needed by end users.
+- **Helper auth is a pairing code + stored long-lived token**: the headless helper cannot use
+  the browser's Discord session cookie, so the host page shows a short code the helper
+  exchanges for a token it stores in `%APPDATA%\golive` and uses from then on.
+- **TURN stays manual** (static host-provided credentials) for now. Cloudflare short-lived
+  credential minting is deferred until a real user hits a strict-CGNAT network.
+- **Windows binaries only**; the SmartScreen unsigned-exe warning is accepted and documented
+  for v1.
+
+1. Release pipeline: tuned `--release` profile (LTO, `codegen-units=1`, `panic=abort`,
+   strip); `tools/release/build.ps1` builds `golive-helper-{version}-windows-x64.exe` and
+   publishes it plus `latest.json` (version, file, sha256) into `server/public/helper/`.
+2. Backend serves the helper: `GET /api/helper/latest` (metadata) and
+   `GET /api/helper/download` (redirect to the versioned file), plus static `/helper/*`.
+3. Host page: with no helper connected, show a download card (version + sha256 + steps);
+   with one connected, compare its hello version to `latest` and hint at updates.
+4. Pairing + token auth: `POST /api/pair` issues a short-lived code; the helper exchanges it
+   (`--pair <code>`) for a long-lived random token (stored hashed); `/ws/helper` accepts
+   `Authorization: Bearer <token>` in addition to the session cookie; the host page shows the
+   pairing code while the helper is offline.
+5. Helper comfort: a system-tray icon (`tray-icon` on a dedicated thread: open host page,
+   start/stop, self-test, quit; live tooltip) and an opt-in "start with Windows" toggle so the
+   helper is always online.
+6. Backend hardening: fail-fast on the default `SESSION_SECRET` unless dev-auth, `GET
+   /healthz`, per-IP rate limits (auth, room create, pair), longer room ids (10 chars).
+
+**Exit condition:** a non-developer can — on a clean Windows PC — download the helper from the
+host page, run and pair it, start a stream, and have it work on a normal residential network;
+and the operator can rebuild/redeploy the backend and helper without helpers silently losing
+auth.
+
 ## 5.2 Updated implementation priority
 
 After the existing v1 milestones, networking improvements should follow this order:

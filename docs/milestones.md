@@ -14,6 +14,7 @@ scope (connection diagnostics) is being finished now.
 | M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ✅ (P2P proven across residential NATs; strict cellular CGNAT classified as TURN-required; IPv6 candidates gathered where available; UPnP/NAT-PMP deferred to M8) |
 | M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (working: granular path + timing metrics + matrix runner + LAN baseline + helper `nat-test` self-test; field re-tests pending) |
 | M8 | **Optional native NAT-assistance experiments** — probe & verify router-assisted port mapping (UPnP IGD / NAT-PMP) in the helper and decide whether it earns a permanent place | ◐ (experiment command `nat-map` + webrtcbin port-pinning verdict; see checklist below) |
+| M9 | **Distribution and production readiness** — release builds + backend-hosted downloads, pairing/token helper auth, tray + autostart comfort, backend hardening; non-developers join without a dev setup | ◐ (P1 download pipeline done — release profile, build.ps1, /api/helper/latest + /download, host-page card; P2 pairing next) |
 
 ## M6 scope checklist
 
@@ -120,6 +121,27 @@ Experiments only; `project.md` §5 exit condition explicitly allows "leave it ou
 networks and does not make normal connections less reliable; if little benefit, leave it out.
 Current evidence (no router support on the tested network + no ICE port-pinning on
 `webrtcbin`) points to **leave it out**; keep `nat-map` as an opt-in diagnostic.
+
+## M9 scope checklist (distribution and production readiness)
+
+Locked decisions: operator-hosted single instance (notebook + cloudflared), downloads served
+by the backend, pairing code + stored token auth, manual TURN only, Windows-only, SmartScreen
+warning accepted for v1.
+
+- [x] Single source for the helper version — `env!("CARGO_PKG_VERSION")` (Cargo.toml)
+- [x] Release profile: LTO, `codegen-units=1`, `panic=abort`, strip (3.5 MB exe vs 15 MB debug)
+- [x] `tools/release/build.ps1` → versioned exe + sha256 + `latest.json` into `server/public/helper/`
+- [x] Backend `GET /api/helper/latest` + `GET /api/helper/download` + static `/helper/*` serving (smoke-tested: latest 200, download 302, file 200/octet-stream)
+- [x] Host page download card (helper offline) + "update available" hint (connected, version compare)
+- [ ] Pairing flow: `POST /api/pair` + exchange → long-lived token (hashed), `/ws/helper` Bearer auth, helper `--pair` CLI storing `%APPDATA%\golive\config.json`
+- [ ] Tray icon + "start with Windows" toggle
+- [ ] Backend hardening: `SESSION_SECRET` fail-fast, `/healthz`, rate limits, room ids 6→10 chars
+- [ ] Validation: release exe against the hosted backend (LAN + phone Wi-Fi); M7 friend's-PC re-test pending
+- [ ] Docs: `docs/host-onboarding.md`, `docs/self-host.md`
+
+**Exit condition:** a non-developer can — on a clean Windows PC — download the helper from the
+host page, run and pair it, and stream on a normal residential network; operator redeploys do
+not silently break helper auth.
 
 ## Notes for later milestones
 
