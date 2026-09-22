@@ -27,6 +27,12 @@ tokio = { version = "1", features = [
 ] }
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
 rustls = { version = "0.23", features = ["ring"] }
+tray-icon = "0.25"
+png = "0.18"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 url = "2"
 

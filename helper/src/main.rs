@@ -10,12 +10,14 @@
 //! element to one `webrtcbin` per connected viewer.  Viewers join and leave
 //! dynamically; each gets its own SDP negotiation and ICE agent.
 
+mod autostart;
 mod config;
 mod natassist;
 mod pair;
 mod pipeline;
 mod protocol;
 mod stun;
+mod tray;
 mod ws;
 
 use std::collections::HashMap;
@@ -34,6 +36,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 pub enum Inbound {
     Server(Server),
+    /// Tray-menu actions (start/stop/self-test/quit).
+    Local(tray::TrayCmd),
     Shutdown,
 }
 
@@ -91,6 +95,8 @@ struct App {
     stun_servers: Vec<String>,
     /// The probed, reachable STUN server (pinned once per config).
     chosen_stun: Option<String>,
+    /// Status feed for the tray thread (None in headless runs).
+    tray: Option<std::sync::mpsc::Sender<tray::TrayStatus>>,
     shutdown: bool,
 }
 
@@ -170,10 +176,12 @@ async fn run_main_impl() -> Result<()> {
 
     let (out_tx, out_rx) = unbounded_channel::<Client>();
     let (in_tx, in_rx) = unbounded_channel::<Inbound>();
+    let (tray_tx, tray_rx) = std::sync::mpsc::channel::<tray::TrayStatus>();
+    let (gst_done_tx, mut gst_done_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
     let gst_handle = std::thread::Builder::new()
         .name("gst".into())
-        .spawn(move || gst_thread(in_rx, out_tx))
+        .spawn(move || gst_thread(in_rx, out_tx, tray_tx, gst_done_tx))
         .context("spawn gst thread")?;
 
     let ws_in = in_tx.clone();
@@ -181,10 +189,21 @@ async fn run_main_impl() -> Result<()> {
         ws::run(&ws_url, auth, VERSION, ws_in, out_rx).await;
     });
 
+    // System tray (skip with GOLIVE_NO_TRAY=1 for headless runs).
+    if env::var("GOLIVE_NO_TRAY").is_err() {
+        tray::spawn(in_tx.clone(), tray_rx, base.clone());
+    }
+
     info!("golive helper {VERSION} starting… (backend {base})");
-    tokio::signal::ctrl_c().await.context("ctrl_c")?;
-    info!("shutting down");
-    let _ = in_tx.send(Inbound::Shutdown);
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("shutting down");
+            let _ = in_tx.send(Inbound::Shutdown);
+        }
+        _ = gst_done_rx.recv() => {
+            info!("gst thread exited (tray quit, fatal error, or shutdown)");
+        }
+    }
     drop(in_tx);
     let _ = gst_handle.join();
     Ok(())
@@ -302,7 +321,12 @@ async fn obtain_cookie(base: &str) -> Result<String> {
 // GStreamer thread
 // ---------------------------------------------------------------------------
 
-fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client>) {
+fn gst_thread(
+    mut in_rx: UnboundedReceiver<Inbound>,
+    out: UnboundedSender<Client>,
+    tray: std::sync::mpsc::Sender<tray::TrayStatus>,
+    done: tokio::sync::mpsc::UnboundedSender<()>,
+) {
     if let Err(e) = gstreamer::init() {
         error!("gstreamer init failed: {e}");
         return;
@@ -317,8 +341,10 @@ fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client
         viewers: HashMap::new(),
         stun_servers: Vec::new(),
         chosen_stun: None,
+        tray: Some(tray),
         shutdown: false,
     };
+    app.report_tray();
 
     loop {
         while let Ok(msg) = in_rx.try_recv() {
@@ -343,6 +369,7 @@ fn gst_thread(mut in_rx: UnboundedReceiver<Inbound>, out: UnboundedSender<Client
         }
     }
     info!("gst thread exiting");
+    let _ = done.send(());
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +380,7 @@ impl App {
     fn handle(&mut self, msg: Inbound) {
         match msg {
             Inbound::Shutdown => self.shutdown = true,
+            Inbound::Local(cmd) => self.handle_local(cmd),
             Inbound::Server(server) => self.handle_server(server),
         }
     }
@@ -543,6 +571,47 @@ impl App {
 
     // -- stream lifecycle ----------------------------------------------------
 
+    /// Push the current state to the tray thread (tooltip + menu enablement).
+    fn report_tray(&self) {
+        if let Some(tx) = &self.tray {
+            let _ = tx.send(tray::TrayStatus {
+                live: self.state == RunState::Live,
+                viewers: self.viewers.len(),
+                has_room: self.current_room.is_some(),
+            });
+        }
+    }
+
+    /// Tray-menu actions: start/stop streaming, NAT self-test, quit.
+    fn handle_local(&mut self, cmd: tray::TrayCmd) {
+        match cmd {
+            tray::TrayCmd::StartStream => {
+                if let Some(room) = self.current_room.clone() {
+                    info!("tray: start streaming into {room}");
+                    self.start_stream(&room);
+                } else {
+                    info!("tray: start requested but no room attached yet — create one on the Host page");
+                }
+            }
+            tray::TrayCmd::StopStream => {
+                info!("tray: stop streaming");
+                self.stop_stream();
+            }
+            tray::TrayCmd::NatTest => {
+                let mut urls = self.stun_servers.clone();
+                if urls.is_empty() {
+                    urls.push(pipeline::DEFAULT_STUN_SERVER.to_string());
+                }
+                let result = stun::run_self_test(&urls);
+                info!("NAT self-test (tray): {}", result.detail);
+            }
+            tray::TrayCmd::Quit => {
+                info!("tray: quit requested");
+                self.shutdown = true;
+            }
+        }
+    }
+
     /// Return the STUN server for the session: the fastest reachable responder
     /// among the backend's list (probed once, cached per list), else the
     /// hardcoded fallback. No config on disk or network dependency beyond the
@@ -579,6 +648,7 @@ impl App {
                 });
                 self.session = Some(session);
                 self.state = RunState::Live;
+                self.report_tray();
                 info!("stream running for room {room_id}");
             }
             Err(e) => warn!("pipeline build failed: {e:#}"),
@@ -589,9 +659,11 @@ impl App {
         if let Some(session) = self.session.take() {
             let _ = pipeline::stop(&session);
             self.state = RunState::Idle;
-            self.current_room = None;
+            // Keep current_room so the tray's "Start streaming" can resume
+            // into the last room without needing the host page.
             self.viewers.clear();
             let _ = self.out.send(Client::DetachRoom);
+            self.report_tray();
             info!("stream stopped");
         }
     }
@@ -618,6 +690,7 @@ impl App {
                 s.viewers.keys().cloned().collect::<Vec<_>>().join(", ")
             );
         }
+        self.report_tray();
     }
 
     fn remove_viewer(&mut self, peer_id: &str) {
@@ -629,6 +702,7 @@ impl App {
                 s.viewers.len()
             );
         }
+        self.report_tray();
     }
 
     /// Check all viewers that haven't received an offer yet and create one.
