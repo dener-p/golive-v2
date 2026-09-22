@@ -11,7 +11,7 @@
 // one JSON line: { ts, label, room, trial, result, path, rttMs, rxBytes, fps }.
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -263,6 +263,14 @@ async function runTrial(rid, devtoolsBase) {
 // ---------------------------------------------------------------------------
 // Matrix recording (--label / --json): one JSON line per trial.
 // ---------------------------------------------------------------------------
+// The results file may not end with a newline (e.g. hand-edited/scripted); never
+// glue two JSON objects onto one line.
+let jsonNeedsSep = false;
+if (jsonFile && existsSync(jsonFile)) {
+  const content = readFileSync(jsonFile, 'utf8');
+  jsonNeedsSep = content.length > 0 && !content.endsWith('\n');
+}
+
 function recordTrial(v) {
   if (!jsonFile) return;
   trialIndex++;
@@ -270,7 +278,7 @@ function recordTrial(v) {
   const local = (pair?.local ?? '').split(':')[0] || null;
   const path = local ? (local === 'relay' ? 'TURN relay' : `direct ${local}`) : 'no pair';
   const rxBytes = (v.lastInbound ?? []).map((i) => i.bytesReceived ?? 0).reduce((a, b) => a + b, 0) || null;
-  appendFileSync(jsonFile, JSON.stringify({
+  appendFileSync(jsonFile, (jsonNeedsSep ? '\n' : '') + JSON.stringify({
     ts: new Date().toISOString(),
     label,
     room: roomId,
@@ -288,6 +296,7 @@ function recordTrial(v) {
     stream: v.lastStatus?.stream ?? null,
     conn: v.lastStatus?.conn ?? null,
   }) + '\n');
+  jsonNeedsSep = false;
 }
 
 function verdict(samples) {
