@@ -74,6 +74,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         <div class="row">
           <button id="cmd-start" class="primary" disabled>Start live</button>
           <button id="cmd-stop" class="danger" disabled>Stop live</button>
+          <button id="cmd-nat-test" class="small" disabled>NAT self-test</button>
         </div>
         <div class="statusline muted" id="command-result"></div>
       </div>
@@ -134,6 +135,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       if (roomId) void sendCommand('start', { roomId });
     });
     root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
+    root.querySelector('#cmd-nat-test')?.addEventListener('click', () => void sendCommand('nat-test'));
 
     // TURN config
     root.querySelector('#turn-save')?.addEventListener('click', async () => {
@@ -216,6 +218,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       const out = root.querySelector('#command-result') as HTMLElement | null;
       const startBtn = root.querySelector('#cmd-start') as HTMLButtonElement | null;
       const stopBtn = root.querySelector('#cmd-stop') as HTMLButtonElement | null;
+      const natBtn = root.querySelector('#cmd-nat-test') as HTMLButtonElement | null;
       if (!badge || !seen) return;
       if (status.connected) {
         badge.textContent = `helper connected · ${status.state ?? 'idle'}`;
@@ -224,6 +227,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         seen.textContent = `last seen ${new Date(status.lastSeenAt!).toLocaleTimeString()}`;
         if (startBtn) startBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = false;
+        if (natBtn) natBtn.disabled = false;
       } else {
         badge.textContent = 'helper offline';
         badge.className = 'badge warn';
@@ -231,13 +235,15 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         seen.textContent = '';
         if (startBtn) startBtn.disabled = true;
         if (stopBtn) stopBtn.disabled = true;
+        if (natBtn) natBtn.disabled = true;
       }
 
       // Report the ack for the command we sent (or the latest one from this helper).
       const last = status.lastCommand;
       if (last && (!lastSentId || last.id === lastSentId) && out) {
         if (last.ok) {
-          out.textContent = `"${last.command}" accepted by helper${last.state ? ` · now ${last.state}` : ''} @ ${new Date(last.at).toLocaleTimeString()}`;
+          const detail = last.detail ? ` — ${last.detail}` : '';
+          out.textContent = `"${last.command}" accepted by helper${last.state ? ` · now ${last.state}` : ''}${detail} @ ${new Date(last.at).toLocaleTimeString()}`;
           out.className = 'statusline ok';
         } else {
           out.textContent = `"${last.command}" REJECTED by helper${last.detail ? ` — ${last.detail}` : ''}`;

@@ -371,6 +371,20 @@ impl App {
                     Some("stopped".into()),
                 ));
             }
+            "nat-test" => {
+                let mut urls = self.stun_servers.clone();
+                if urls.is_empty() {
+                    urls.push(pipeline::DEFAULT_STUN_SERVER.to_string());
+                }
+                let result = stun::run_self_test(&urls);
+                info!("NAT self-test: {}", result.detail);
+                let _ = self.out.send(Client::ack(
+                    id,
+                    true,
+                    self.state.as_str(),
+                    Some(result.detail),
+                ));
+            }
             other => {
                 let _ = self.out.send(Client::ack(
                     id,

@@ -12,7 +12,7 @@ scope (connection diagnostics) is being finished now.
 | M4 | **Encode once, multiple viewers** — single AV1 encoder fanned into one peer connection per viewer (2–3 then ~10), upload/quality impact measured and surfaced | ❌ |
 | M5 | **Permissions and polish** — Discord OAuth identity + room ownership for **hosts only**, **anonymous viewers via the room link (no allowlist)**, host-provided TURN, room-link UX, helper reconnect/backoff, source picker, bandwidth/error indicators | ❌ |
 | M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ✅ (P2P proven across residential NATs; strict cellular CGNAT classified as TURN-required; IPv6 candidates gathered where available; UPnP/NAT-PMP deferred to M8) |
-| M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (started: granular path + viewer timing line + helper `settled after Ns` log; matrix runner + self-test mode next) |
+| M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (working: granular path + timing metrics + matrix runner + LAN baseline + helper `nat-test` self-test; field re-tests pending) |
 
 ## M6 scope checklist
 
@@ -84,6 +84,20 @@ Native AV1 + one viewer. See `docs/m2-helper.md` for the design notes.
 
 **Exit condition:** the native helper captures the desktop, encodes AV1 once, and one
 Chromium viewer receives a stable live stream.
+
+## M7 scope checklist (connection diagnostics + NAT regression suite)
+
+- [x] Granular final transport path at candidate kind — `direct host` / `srflx` / `prflx` vs `TURN relay`, in the watch stats line + host viewer card (`pathInfo`)
+- [x] Connection timing metrics — ICE gather time, ICE check/first-frame timing, RTT, loss, bitrate, FPS resolution; disconnect reason (`Peer <state> after Ns`) in the watch log
+- [x] Failed sessions render NO PATH once; watch `stallDiagnosis` buckets (failed / transport / decode) + carrier-CGNAT (100.64/10) note
+- [x] Helper settle line logs `ICE settled ({state}) after {N}s — local […], remote […]` with candidate tallies
+- [x] Repeatable matrix runner — `tools/repro/repro.mjs` (`--label`, `--trials`, `--seconds`, `--json`), JSONL row-separation guard, per-trial records; `tools/repro/README.md` catalog
+- [x] Network matrix seeded + LAN baseline snapshot (5×20s, all WORKS, direct host) as the committed green reference
+- [x] Helper NAT self-test — `nat-test` command: same-socket probes against 2 distinct public STUN endpoints (Google + Cloudflare in defaults), endpoint-dependence verdict, CGNAT/private/double-NAT detection, best-effort global-IPv6 reflexive probe; verdict line surfaces on the host page
+- [ ] Field re-tests to grow the matrix (e.g. second residential network on the phone; re-run LAN leg after any networking/signaling change)
+
+**Exit condition:** the matrix re-runs green on the networks tested, and the host can
+see *why* their own network classifies the way it does (`nat-test`) before a viewer joins.
 
 ## Notes for later milestones
 

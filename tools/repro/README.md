@@ -57,3 +57,20 @@ Run the full LAN leg after any change to signaling, ICE handling, the helper pip
 the browser `webrtc.ts`/watch page. A matrix run is "green" when the LAN leg is 100%
 `WORKS` and every non-LAN row keeps its expected classification (direct across residential
 NATs, TURN-required on strict CGNAT).
+
+## NAT self-test (pre-flight, before a trial)
+
+The host page's **NAT self-test** button (helper `nat-test` command) classifies the
+*machine running the helper* before any viewer joins:
+
+- same UDP socket probed against two **distinct** public STUN endpoints (defaults:
+  Google `stun*.l.google.com` + Cloudflare `stun.cloudflare.com:3478`, so endpoint
+  dependence is measurable even when one resolver only yields one Google IP),
+- verdict: `endpoint-independent` / `symmetric` (port changes per destination) /
+  `cgnat` (mapped ip in 100.64/10) / `private` (double NAT) / `unreachable`,
+- plus a best-effort global-IPv6 reflexive probe.
+
+The verdict line appears in `#command-result` on the host page and in the helper's log as
+`NAT self-test: …`. Use it to sanity-check the *expected* row classification before
+recording a matrix row (e.g. confirm the helper side is not CGNAT before a
+residential-to-residential srflx run).
