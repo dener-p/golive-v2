@@ -12,16 +12,24 @@ use log::{error, info, warn};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::COOKIE;
+use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, COOKIE};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::protocol::{parse_server, Client};
 use crate::Inbound;
 
+/** How the helper authenticates to `/ws/helper`. */
+pub enum WsAuth {
+    /// Paired long-lived device token → `Authorization: Bearer <token>`.
+    Bearer(String),
+    /// Dev-only session cookie → `Cookie: session=<cookie>`.
+    Cookie(String),
+}
+
 pub async fn run(
     ws_url: &str,
-    session_cookie: &str,
+    auth: WsAuth,
     version: &str,
     in_tx: UnboundedSender<Inbound>,
     mut out_rx: UnboundedReceiver<Client>,
@@ -37,8 +45,17 @@ pub async fn run(
             }
         };
         let mut req = req;
-        if let Ok(v) = HeaderValue::from_str(&format!("session={session_cookie}")) {
-            req.headers_mut().insert(COOKIE, v);
+        match &auth {
+            WsAuth::Bearer(token) => {
+                if let Ok(v) = HeaderValue::from_str(&format!("Bearer {token}")) {
+                    req.headers_mut().insert(AUTHORIZATION, v);
+                }
+            }
+            WsAuth::Cookie(cookie) => {
+                if let Ok(v) = HeaderValue::from_str(&format!("session={cookie}")) {
+                    req.headers_mut().insert(COOKIE, v);
+                }
+            }
         }
 
         match connect_async(req).await {
@@ -102,6 +119,17 @@ pub async fn run(
                 }
             }
             Err(e) => {
+                // Upsert auth failures (401/403 on the upgrade) so a revoked token
+                // doesn't spin forever — tell the user to pair again.
+                if let tokio_tungstenite::tungstenite::Error::Http(res) = &e {
+                    if res.status().is_client_error() {
+                        error!(
+                            "auth rejected by the backend ({}) — the device token was revoked or missing. Run `golive-helper unpair`, then pair again from the Host page.",
+                            res.status()
+                        );
+                        return;
+                    }
+                }
                 warn!("connect failed: {e}");
             }
         }

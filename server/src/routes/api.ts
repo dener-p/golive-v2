@@ -5,6 +5,14 @@ import { requireUser } from '../http';
 import { helperStatus, sendCommand } from '../helperRegistry';
 import { iceServers, isDevAuth, config } from '../config';
 import { getRoom, getRoomTurn, setRoomTurn } from '../store';
+import {
+  consumePairingCode,
+  createPairingCode,
+  helperTokensFor,
+  issueHelperToken,
+  revokeBearerToken,
+  revokeHelperToken,
+} from '../tokens';
 
 export const apiApp = new Hono();
 
@@ -12,7 +20,59 @@ export const apiApp = new Hono();
 const HELPER_DIR = resolve(import.meta.dir, '../../public/helper');
 
 apiApp.get('/meta', (c) =>
-  c.json({ name: 'golive', auth: isDevAuth ? 'dev' : 'discord' }),
+  c.json({ name: 'golive', auth: isDevAuth ? 'dev' : 'discord', baseUrl: config.baseUrl }),
+);
+
+// ---------------------------------------------------------------------------
+// Helper pairing (host browser mint → helper exchange → long-lived token)
+// ---------------------------------------------------------------------------
+
+apiApp.post('/pair', (c) => {
+  const user = requireUser(c);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const { code, expiresInSeconds } = createPairingCode(user);
+  return c.json({ code, expiresInSeconds });
+});
+
+apiApp.post('/pair/exchange', async (c) => {
+  let body: unknown = null;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'bad_request' }, 400);
+  }
+  const { code, deviceName } = (body ?? {}) as { code?: unknown; deviceName?: unknown };
+  if (typeof code !== 'string' || code.length > 12) {
+    return c.json({ error: 'invalid_code' }, 400);
+  }
+  const user = consumePairingCode(code);
+  if (!user) return c.json({ error: 'code_invalid_or_expired' }, 410);
+  const issued = issueHelperToken(user, typeof deviceName === 'string' ? deviceName : undefined);
+  if (!issued) return c.json({ error: 'too_many_devices' }, 409);
+  return c.json({ token: issued.token, userId: user.id, deviceId: issued.id });
+});
+
+apiApp.get('/pair/tokens', (c) => {
+  const user = requireUser(c);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({
+    tokens: helperTokensFor(user.id).map((t) => ({
+      id: t.id,
+      deviceName: t.deviceName,
+      createdAt: new Date(t.createdAt).toISOString(),
+    })),
+  });
+});
+
+apiApp.delete('/pair/tokens/:id', (c) => {
+  const user = requireUser(c);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  return c.json({ ok: revokeHelperToken(user.id, c.req.param('id')) });
+});
+
+// The helper revokes its own stored token on "unpair": presented via Bearer.
+apiApp.post('/pair/revoke', (c) =>
+  c.json({ ok: revokeBearerToken(c.req.header('authorization')) }),
 );
 
 // ---------------------------------------------------------------------------

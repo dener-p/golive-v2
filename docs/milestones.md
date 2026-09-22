@@ -14,7 +14,7 @@ scope (connection diagnostics) is being finished now.
 | M6 | **P2P NAT traversal (no TURN)** — multiple public STUN servers (backend-driven, helper probes & pins a reachable one), full trickle ICE verified end-to-end, IPv6/ICE-TCP candidates kept, candidate-type diagnostics for failed direct connections, TURN stays optional recovery | ✅ (P2P proven across residential NATs; strict cellular CGNAT classified as TURN-required; IPv6 candidates gathered where available; UPnP/NAT-PMP deferred to M8) |
 | M7 | **Connection diagnostics + NAT regression suite** — final transport path shown at candidate granularity (`direct host`/`srflx`/`prflx` vs `TURN relay`), timing metrics (gather / check / time-to-first-frame / RTT / loss / bitrate / disconnect reason), repeatable network matrix re-run after networking changes | ◐ (working: granular path + timing metrics + matrix runner + LAN baseline + helper `nat-test` self-test; field re-tests pending) |
 | M8 | **Optional native NAT-assistance experiments** — probe & verify router-assisted port mapping (UPnP IGD / NAT-PMP) in the helper and decide whether it earns a permanent place | ◐ (experiment command `nat-map` + webrtcbin port-pinning verdict; see checklist below) |
-| M9 | **Distribution and production readiness** — release builds + backend-hosted downloads, pairing/token helper auth, tray + autostart comfort, backend hardening; non-developers join without a dev setup | ◐ (P1 download pipeline done — release profile, build.ps1, /api/helper/latest + /download, host-page card; P2 pairing next) |
+| M9 | **Distribution and production readiness** — release builds + backend-hosted downloads, pairing/token helper auth, tray + autostart comfort, backend hardening; non-developers join without a dev setup | ◐ (P1 download pipeline + P2 pairing/token auth done; P3 tray comfort next) |
 
 ## M6 scope checklist
 
@@ -133,7 +133,7 @@ warning accepted for v1.
 - [x] `tools/release/build.ps1` → versioned exe + sha256 + `latest.json` into `server/public/helper/`
 - [x] Backend `GET /api/helper/latest` + `GET /api/helper/download` + static `/helper/*` serving (smoke-tested: latest 200, download 302, file 200/octet-stream)
 - [x] Host page download card (helper offline) + "update available" hint (connected, version compare)
-- [ ] Pairing flow: `POST /api/pair` + exchange → long-lived token (hashed), `/ws/helper` Bearer auth, helper `--pair` CLI storing `%APPDATA%\golive\config.json`
+- [x] Pairing flow: `POST /api/pair` + `POST /api/pair/exchange` → long-lived token (SHA-256 stored), `/ws/helper` Bearer auth, helper `pair`/`unpair` CLI storing `%APPDATA%\golive\config.json` (end-to-end smoke-tested: mint → exchange → token-connect → revoke/unpair)
 - [ ] Tray icon + "start with Windows" toggle
 - [ ] Backend hardening: `SESSION_SECRET` fail-fast, `/healthz`, rate limits, room ids 6→10 chars
 - [ ] Validation: release exe against the hosted backend (LAN + phone Wi-Fi); M7 friend's-PC re-test pending

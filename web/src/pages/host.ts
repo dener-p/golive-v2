@@ -26,6 +26,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   // --- state -------------------------------------------------------------
   let roomId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pairExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   /** Command id we most recently sent; used to report its ack (or staleness). */
   let lastSentId: string | null = null;
@@ -33,6 +34,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   const cleanup = (): void => {
     disposed = true;
     if (pollTimer) clearInterval(pollTimer);
+    if (pairExpiryTimer) clearTimeout(pairExpiryTimer);
   };
   window.addEventListener('pagehide', cleanup);
 
@@ -81,6 +83,24 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           <button id="cmd-nat-map" class="small" disabled>NAT-map probe</button>
         </div>
         <div class="statusline muted" id="command-result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Pair the helper <span class="muted">(skip if it is already running)</span></h2>
+        <p class="muted">
+          The helper authenticates with a device token, not your browser session. Mint a short
+          code, run the command on your machine, and the helper stores its own token.
+        </p>
+        <div class="row">
+          <button id="pair-get" class="primary">Get pairing code</button>
+          <span class="statusline muted" id="pair-status"></span>
+        </div>
+        <div id="pair-box" hidden>
+          <p class="mono big" id="pair-code"></p>
+          <p id="pair-cmd-line"></p>
+          <p class="muted">Expires in <span id="pair-expiry">5</span> min. Run it, then refresh this page.</p>
+        </div>
+        <div id="pair-devices"></div>
       </div>
 
       <div class="card">
@@ -191,6 +211,77 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       }
     });
 
+    // pairing (device tokens for the native helper)
+    const pairStatus = qs(root, '#pair-status');
+    const pairBox = root.querySelector('#pair-box') as HTMLElement | null;
+    let refreshDevices: () => Promise<void> = async () => {};
+
+    root.querySelector('#pair-get')?.addEventListener('click', async () => {
+      const btn = root.querySelector('#pair-get') as HTMLButtonElement | null;
+      if (btn) btn.disabled = true;
+      pairStatus.className = 'statusline muted';
+      pairStatus.textContent = 'Minting code…';
+      try {
+        const { code, expiresInSeconds } = await api.pairCode();
+        if (pairBox) pairBox.hidden = false;
+        const codeEl = root.querySelector('#pair-code');
+        if (codeEl) codeEl.textContent = code;
+        const cmdLine = root.querySelector('#pair-cmd-line');
+        if (cmdLine) {
+          cmdLine.innerHTML = `Run this on the machine that will stream: <code>golive-helper.exe pair ${esc(meta.baseUrl)} ${esc(code)}</code>`;
+        }
+        const expiry = root.querySelector('#pair-expiry');
+        if (expiry) expiry.textContent = String(expiresInSeconds);
+        pairStatus.className = 'statusline ok';
+        pairStatus.textContent = 'Code ready — run the command, then refresh this page.';
+        if (pairExpiryTimer) clearTimeout(pairExpiryTimer);
+        pairExpiryTimer = setTimeout(() => {
+          pairStatus.className = 'statusline';
+          pairStatus.textContent = 'Code expired — mint a new one.';
+        }, expiresInSeconds * 1000);
+      } catch (err) {
+        pairStatus.className = 'statusline error';
+        pairStatus.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    refreshDevices = async (): Promise<void> => {
+      const el = root.querySelector('#pair-devices');
+      if (!el) return;
+      try {
+        const { tokens } = await api.pairedDevices();
+        if (!tokens.length) {
+          el.textContent = 'No paired devices yet.';
+          return;
+        }
+        el.innerHTML =
+          '<div class="muted" style="margin:10px 0 4px">Paired devices (one per helper install):</div>' +
+          tokens
+            .map(
+              (t) =>
+                `<div class="row" style="margin-bottom:4px"><span class="grow">${esc(t.deviceName || t.id)} <span class="muted">· paired ${esc(new Date(t.createdAt).toLocaleDateString())}</span></span><button class="small" data-revoke="${esc(t.id)}">Revoke</button></div>`,
+            )
+            .join('');
+        el.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              await api.revokeDevice(btn.dataset.revoke ?? '');
+              void refreshDevices();
+            } catch (err) {
+              btn.disabled = false;
+              pairStatus.className = 'statusline error';
+              pairStatus.textContent = `Revoke failed: ${err instanceof Error ? err.message : err}`;
+            }
+          });
+        });
+      } catch {
+        el.textContent = '';
+      }
+    };
+    void refreshDevices();
   };
 
   const setRoomCreator = (): void => {

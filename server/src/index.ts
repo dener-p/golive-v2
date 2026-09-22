@@ -4,7 +4,7 @@ import { upgradeWebSocket, websocket } from 'hono/bun';
 import { resolve, sep } from 'node:path';
 import type { ClientSignal, HelperMessage, Role, ServerHelperMessage, ServerSignal } from '@golive/shared';
 import { config, isDevAuth } from './config';
-import { userFromCookieHeader } from './http';
+import { userFromCookieHeader, userFromRequest } from './http';
 import { authApp } from './routes/auth';
 import { apiApp } from './routes/api';
 import { roomsApp } from './routes/rooms';
@@ -104,7 +104,7 @@ app.get(
 app.get(
   '/ws/helper',
   upgradeWebSocket((c) => {
-    const user = userFromCookieHeader(c.req.header('cookie'));
+    const user = userFromRequest(c);
     const connId = crypto.randomUUID();
     /** Presence only counts once a valid `hello` handshake completes. */
     let registered = false;

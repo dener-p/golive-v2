@@ -10,7 +10,9 @@
 //! element to one `webrtcbin` per connected viewer.  Viewers join and leave
 //! dynamically; each gets its own SDP negotiation and ICE agent.
 
+mod config;
 mod natassist;
+mod pair;
 mod pipeline;
 mod protocol;
 mod stun;
@@ -92,48 +94,180 @@ struct App {
     shutdown: bool,
 }
 
-fn main() -> Result<()> {
+fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
 
-    let base = env::var("BASE_URL").unwrap_or_else(|_| "https://api-golive.puhl.dev".into());
-    let ws_url = format!("{}/ws/helper", base.replace("http", "ws").replace("https", "wss"));
-
-
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
+
+    let args: Vec<String> = env::args().skip(1).collect();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
-        .context("tokio runtime")?;
+        .build();
 
-    rt.block_on(async move {
-        let cookie = obtain_cookie(&base).await?;
+    let code = match rt {
+        Err(e) => {
+            error!("tokio runtime: {e}");
+            1
+        }
+        Ok(rt) => match args.first().map(String::as_str) {
+            // `golive-helper pair [BASE_URL] CODE` — exchange a pairing code for
+            // a stored token (%APPDATA%\golive\config.json).
+            Some("pair") => rt.block_on(pair_main(&args[1..])),
+            // `golive-helper unpair` (alias: forget) — revoke the token + drop config.
+            Some("unpair") | Some("forget") => rt.block_on(unpair_main()),
+            Some("help") | Some("-h") | Some("--help") => {
+                print_usage();
+                0
+            }
+            Some(other) => {
+                eprintln!("unknown subcommand `{other}` — try `golive-helper pair <CODE>`.");
+                2
+            }
+            None => rt.block_on(run_main()),
+        },
+    };
+    std::process::exit(code);
+}
 
-        let (out_tx, out_rx) = unbounded_channel::<Client>();
-        let (in_tx, in_rx) = unbounded_channel::<Inbound>();
+fn print_usage() {
+    println!(
+        "golive helper {VERSION}\n\
+         \n\
+         usage:\n\
+         \x20 golive-helper              run the streaming helper (paired, in the tray/SmartScreen)\n\
+         \x20 golive-helper pair <CODE>   pair with the default backend — CODE from the Host page\n\
+         \x20 golive-helper pair <URL> <CODE>\n\
+         \x20 golive-helper unpair        revoke this device's token and forget the pairing"
+    );
+}
 
-        let gst_handle = std::thread::Builder::new()
-            .name("gst".into())
-            .spawn(move || gst_thread(in_rx, out_tx))
-            .context("spawn gst thread")?;
+/// Normal run: connect to the backend and stream. Resolves the backend URL and
+/// auth credentials (stored token > dev cookie), then drives GStreamer.
+async fn run_main() -> i32 {
+    match run_main_impl().await {
+        Ok(()) => 0,
+        Err(e) => {
+            error!("{e:#}");
+            1
+        }
+    }
+}
 
-        let ws_in = in_tx.clone();
-        let ws_cookie = cookie.clone();
-        tokio::spawn(async move {
-            ws::run(&ws_url, &ws_cookie, VERSION, ws_in, out_rx).await;
-        });
+async fn run_main_impl() -> Result<()> {
+    let base = env::var("BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .or_else(|| config::load().map(|c| c.base_url))
+        .unwrap_or_else(|| config::DEFAULT_BASE_URL.to_string());
+    let ws_url = format!("{}/ws/helper", base.replace("http", "ws").replace("https", "wss"));
 
-        info!("golive helper {VERSION} starting… (backend {base})");
-        tokio::signal::ctrl_c().await.context("ctrl_c")?;
-        info!("shutting down");
-        let _ = in_tx.send(Inbound::Shutdown);
-        drop(in_tx);
-        let _ = gst_handle.join();
-        Ok::<(), anyhow::Error>(())
-    })
+    let auth = resolve_auth(&base).await?;
+
+    let (out_tx, out_rx) = unbounded_channel::<Client>();
+    let (in_tx, in_rx) = unbounded_channel::<Inbound>();
+
+    let gst_handle = std::thread::Builder::new()
+        .name("gst".into())
+        .spawn(move || gst_thread(in_rx, out_tx))
+        .context("spawn gst thread")?;
+
+    let ws_in = in_tx.clone();
+    tokio::spawn(async move {
+        ws::run(&ws_url, auth, VERSION, ws_in, out_rx).await;
+    });
+
+    info!("golive helper {VERSION} starting… (backend {base})");
+    tokio::signal::ctrl_c().await.context("ctrl_c")?;
+    info!("shutting down");
+    let _ = in_tx.send(Inbound::Shutdown);
+    drop(in_tx);
+    let _ = gst_handle.join();
+    Ok(())
+}
+
+/// Stored paired token > dev SESSION_COOKIE > localhost dev-login > error.
+async fn resolve_auth(base: &str) -> Result<ws::WsAuth> {
+    if let Ok(cookie) = env::var("SESSION_COOKIE") {
+        return Ok(ws::WsAuth::Cookie(cookie));
+    }
+    if let Some(cfg) = config::load() {
+        info!("using paired device token (backend {})", cfg.base_url);
+        return Ok(ws::WsAuth::Bearer(cfg.token));
+    }
+    if base.contains("localhost") || base.contains("127.0.0.1") {
+        info!("no stored pair — dev-login against {base}");
+        return Ok(ws::WsAuth::Cookie(obtain_cookie(base).await?));
+    }
+    let where_config = config::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".into());
+    Err(anyhow!(
+        "the helper is not paired yet — nothing stored in {where_config}.\n\
+         Get a pairing code from the Host page, then run:\n    golive-helper.exe pair {base} <CODE>"
+    ))
+}
+
+/// `golive-helper pair [BASE_URL] CODE` — exchange a code for a stored token.
+async fn pair_main(args: &[String]) -> i32 {
+    let (base, code) = match args {
+        [code] => (config::DEFAULT_BASE_URL.to_string(), code.clone()),
+        [base, code] => (base.clone(), code.clone()),
+        _ => {
+            eprintln!("usage: golive-helper.exe pair [BASE_URL] CODE");
+            return 2;
+        }
+    };
+    let device = env::var("COMPUTERNAME").unwrap_or_else(|_| "golive-helper".into());
+    match pair::exchange_code(&base, code.trim(), &device).await {
+        Ok(ok) => {
+            if let Err(e) = config::save(&config::HelperConfig {
+                base_url: base.clone(),
+                token: ok.token,
+            }) {
+                eprintln!("could not save the token locally: {e:#}");
+                return 1;
+            }
+            println!("paired with {base} as user {}", ok.user_id);
+            println!(
+                "device id {} is registered on your account — revoke it from the Host page if needed.",
+                ok.device_id
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("pairing failed: {e:#}");
+            1
+        }
+    }
+}
+
+/// `golive-helper unpair` — revoke this device's token and drop the config.
+async fn unpair_main() -> i32 {
+    let Some(cfg) = config::load() else {
+        println!("not paired — nothing to do.");
+        return 0;
+    };
+    match pair::revoke(&cfg.base_url, &cfg.token).await {
+        Ok(()) => println!("device token revoked on the server"),
+        Err(e) => eprintln!(
+            "warning: could not revoke on the server ({e:#}); removing the local config anyway"
+        ),
+    }
+    match config::remove() {
+        Ok(()) => {
+            println!("local config removed");
+            0
+        }
+        Err(e) => {
+            eprintln!("could not remove the local config: {e:#}");
+            1
+        }
+    }
 }
 
 async fn obtain_cookie(base: &str) -> Result<String> {

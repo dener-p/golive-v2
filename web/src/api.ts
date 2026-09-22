@@ -32,6 +32,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export interface MetaInfo {
   name: string;
   auth: 'dev' | 'discord';
+  /** API origin — used to build the `golive-helper.exe pair <base> <code>` command. */
+  baseUrl: string;
+}
+
+export interface PairedDevice {
+  id: string;
+  deviceName: string;
+  createdAt: string;
+}
+
+export interface PairCodeResponse {
+  code: string;
+  expiresInSeconds: number;
 }
 
 export interface HelperCommandResult {
@@ -73,6 +86,16 @@ export const api = {
   },
   helperLatest(): Promise<HelperLatest> {
     return request('/api/helper/latest');
+  },
+  /** Mint a short-lived pairing code for the (signed-in) caller. */
+  pairCode(): Promise<PairCodeResponse> {
+    return request('/api/pair', { method: 'POST' });
+  },
+  pairedDevices(): Promise<{ tokens: PairedDevice[] }> {
+    return request('/api/pair/tokens');
+  },
+  revokeDevice(deviceId: string): Promise<{ ok: boolean }> {
+    return request(`/api/pair/tokens/${deviceId}`, { method: 'DELETE' });
   },
   helperCommand(command: string, payload?: unknown): Promise<HelperCommandResult> {
     return request('/api/helper/command', {
