@@ -42,7 +42,13 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     </p>
 
     <div class="card">
-      <video id="player" class="hidden" autoplay playsinline muted></video>
+      <div class="player-wrap" id="player-wrap">
+        <video id="player" class="hidden" autoplay playsinline muted></video>
+        <div class="player-controls" id="player-controls" hidden>
+          <button id="btn-mute" class="player-btn" type="button" title="${t('watch.unmute')}">🔇</button>
+          <button id="btn-fs" class="player-btn" type="button" title="${t('watch.fullscreen')}">⛶</button>
+        </div>
+      </div>
       <div id="waiting">
         <div class="row">
           <span class="mono" id="waiting-text">${t('watch.waiting')}</span>
@@ -78,6 +84,26 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   const setWaiting = (text: string): void => {
     waitingText.textContent = text;
   };
+
+  // Player overlay controls: mute + fullscreen (enabled once media is live).
+  const playerControls = qs(root, '#player-controls');
+  const muteBtn = qs(root, '#btn-mute') as HTMLButtonElement;
+  const fsBtn = qs(root, '#btn-fs') as HTMLButtonElement;
+  const playerWrap = qs(root, '#player-wrap');
+
+  muteBtn.addEventListener('click', () => {
+    video.muted = !video.muted;
+    muteBtn.textContent = video.muted ? '🔇' : '🔊';
+    muteBtn.title = video.muted ? t('watch.unmute') : t('watch.mute');
+  });
+
+  fsBtn.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+    } else {
+      void playerWrap.requestFullscreen().catch(() => {});
+    }
+  });
 
   let pc: RTCPeerConnection | null = null;
   let iceQueue: IceCandidateMessage[] = [];
@@ -257,6 +283,8 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             video.muted = true;
             void video.play().catch(() => {});
             video.classList.remove('hidden');
+            playerControls.hidden = false;
+            muteBtn.textContent = video.muted ? '🔇' : '🔊';
             waiting.style.display = 'none';
             mediaLive = false; // re-verify this track actually renders frames
             trackAt = performance.now();

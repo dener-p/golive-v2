@@ -106,6 +106,58 @@ video {
 }
 video.hidden { display: none; }
 
+/* --- viewer player: overlay controls + fullscreen -------------------------- */
+
+.player-wrap {
+  position: relative;
+  line-height: 0;
+}
+
+.player-wrap video {
+  display: block;
+}
+
+.player-controls {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 5;
+}
+
+.player-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(4px);
+  transition: background 150ms ease, transform 60ms ease;
+}
+
+.player-btn:hover { background: rgba(0, 0, 0, 0.85); }
+.player-btn:active { transform: scale(0.94); }
+
+.player-wrap:fullscreen {
+  background: #000;
+  display: grid;
+  place-items: center;
+}
+
+.player-wrap:fullscreen video {
+  max-height: 100vh;
+  height: 100%;
+  object-fit: contain;
+}
+
 .statusline { min-height: 20px; margin-top: 10px; font-size: 13px; }
 .statusline.error { color: var(--red); }
 .statusline.ok { color: var(--green); }

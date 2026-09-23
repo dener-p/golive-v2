@@ -14,11 +14,11 @@ type Dict = Record<string, string>;
 const pt: Dict = {
   // nav / login
   'nav.home': 'início',
-  'nav.host': 'anfitrião',
+  'nav.host': 'host',
   'nav.localeTitle': 'Mudar para inglês',
   'login.title': 'Entre para transmitir',
   'login.sub':
-    'Só anfitriões entram — é o que identifica o dono da sala. Espectadores só precisam abrir o link da sala.',
+    'Só hosts entram — é o que identifica o dono da sala. Espectadores só precisam abrir o link da sala.',
   'login.dev': 'Login de dev (sem Discord configurado)',
   'login.discord': 'Entrar com Discord',
 
@@ -34,7 +34,7 @@ const pt: Dict = {
   'home.discordLogin': 'Entrar com Discord',
   'home.hostTitle': 'Criar uma sala',
   'home.hostSub':
-    'A sala pertence a você; só você entra como anfitrião. Espectadores só precisam do link.',
+    'A sala pertence a você; só você entra como host. Espectadores só precisam do link.',
   'home.createRoom': 'Criar sala',
   'home.watchTitle': 'Assistir uma sala',
   'home.roomPlaceholder': 'id da sala (ex.: ab3x9k)',
@@ -42,13 +42,13 @@ const pt: Dict = {
   'home.creating': 'Criando sala…',
   'home.roomCreated': 'Sala criada',
   'home.shareLink': 'Compartilhe este link com os espectadores:',
-  'home.openHostPage': 'Abrir página do anfitrião',
+  'home.openHostPage': 'Abrir página do host',
   'home.copyLink': 'Copiar link',
   'home.createFailed': 'Falha ao criar sala: {err}',
 
   // host
-  'host.title': 'Modo anfitrião',
-  'host.unauthed': 'O modo anfitrião é liberado quando o helper nativo conecta no servidor.',
+  'host.title': 'Modo host',
+  'host.unauthed': 'O modo host é liberado quando o helper nativo conecta no servidor.',
   'host.subtitle':
     'Os controles passam pelo servidor; o helper nativo só é alcançado por ele.',
   'host.roomCard': 'Sala',
@@ -111,37 +111,40 @@ const pt: Dict = {
   // watch
   'watch.missingRoom': 'Falta o id da sala.',
   'watch.roomNotFound': 'Sala não encontrada',
-  'watch.notFoundSub': '“{id}” não existe. Peça o link correto ao anfitrião.',
+  'watch.notFoundSub': '“{id}” não existe. Peça o link correto ao host.',
   'watch.title': 'Assistir {id}',
   'watch.copyLink': 'copiar link da sala',
-  'watch.waiting': 'Aguardando o anfitrião começar a transmitir…',
+  'watch.waiting': 'Aguardando o host começar a transmitir…',
   'watch.av1Ok': ' · decodificação AV1 OK',
   'watch.av1Slow': ' · decodificação AV1 NÃO/lenta',
   'watch.receiving': 'Recebendo transmissão ao vivo.',
-  'watch.connectedWaiting': 'Conectado ao anfitrião — aguardando vídeo…',
+  'watch.connectedWaiting': 'Conectado ao host — aguardando vídeo…',
   'watch.peerState': 'Conexão {state}.',
   'watch.peerStateAfter': 'Conexão {state} depois de {s}s.',
   'watch.attempt': 'Tentativa {n}: {reason}',
   'watch.setupFailed': 'Não foi possível iniciar a mídia: {err}',
   'watch.joinFailed': 'Falha ao entrar: {err}',
   'watch.sigLost': '(conexão de sinalização perdida)',
-  'watch.sigLostBeforeHost': 'Sinalização perdida antes de ver o anfitrião.',
+  'watch.sigLostBeforeHost': 'Sinalização perdida antes de ver o host.',
   'watch.joined': '(entrou como espectador · {n})',
   'watch.viewer': 'espectador',
   'watch.viewers': 'espectadores',
   'watch.hostPresentConnecting': 'Anfitrião presente — conectando…',
   'watch.hostPresent': 'Anfitrião presente.',
-  'watch.hostConnected': '(anfitrião conectado)',
-  'watch.hostLeft': '(anfitrião saiu)',
+  'watch.hostConnected': '(host conectado)',
+  'watch.hostLeft': '(host saiu)',
   'watch.hostOffline':
     'Anfitrião ficou offline. Atualize para voltar quando ele retornar.',
   'watch.serverError': '{code}: {message}',
-  'watch.noHost': '(nenhum anfitrião detectado)',
+  'watch.noHost': '(nenhum host detectado)',
   'watch.noHostBroadcasting':
-    'Nenhum anfitrião está transmitindo esta sala ainda — inicie o helper nativo ou o host de teste.',
+    'Nenhum host está transmitindo esta sala ainda — inicie o helper nativo ou o host de teste.',
   'watch.gather': 'coleta {ms}ms',
   'watch.check': 'checagem {ms}ms',
   'watch.firstFrame': 'primeiro frame {ms}ms',
+  'watch.unmute': 'Ativar som',
+  'watch.mute': 'Silenciar',
+  'watch.fullscreen': 'Tela cheia',
 };
 
 const en: Dict = {
@@ -271,6 +274,9 @@ const en: Dict = {
   'watch.gather': 'gather {ms}ms',
   'watch.check': 'check {ms}ms',
   'watch.firstFrame': 'first frame {ms}ms',
+  'watch.unmute': 'Unmute',
+  'watch.mute': 'Mute',
+  'watch.fullscreen': 'Fullscreen',
 };
 
 export function locale(): Locale {
