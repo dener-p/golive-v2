@@ -39,17 +39,24 @@ Then open http://localhost:5173:
 
 ## Real (non-local) deployment
 
-The backend is a single always-reachable service; for a quick start point it at a notebook with a `cloudflared` tunnel:
+The backend is a single always-reachable service. For the full runbook (`.env`,
+Discord OAuth, SESSION_SECRET, named `cloudflared` tunnel on your own domain, updates,
+operating notes) see **`docs/self-host.md`**.
+
+Quick start — useful for a throwaway check on a machine that has `cloudflared`:
 
 ```bash
 # terminal 1 – run the backend
 bun install && bun run build && bun run start
 
-# terminal 2 – expose it
+# terminal 2 – expose it (random hostname, changes every restart)
 cloudflared tunnel --url http://localhost:8787
 ```
 
-Set `BASE_URL` (in `.env`) to the tunnel hostname and re-added `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` to switch from dev-auth to real Discord OAuth. Redirect URI: `{BASE_URL}/auth/callback`.
+Note: quick tunnels get a new `*.trycloudflare.com` hostname per run — use a **named
+tunnel** (see `docs/self-host.md`) for a permanent domain. `BASE_URL`, the Discord
+redirect URI (`{BASE_URL}/auth/callback`), and `DISCORD_CLIENT_*` switch the backend
+from dev-auth to real OAuth.
 
 ## Scripts
 
