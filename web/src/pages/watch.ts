@@ -11,10 +11,11 @@ import {
   queueCandidate,
 } from '../webrtc';
 import { nav, qs, esc, watchLink } from '../ui';
+import { t } from '../i18n';
 
 export async function renderWatch(root: HTMLElement, roomId: string): Promise<void> {
   if (!roomId) {
-    root.innerHTML = `${nav()}<div class="card">Missing room id. <a href="#/">Home</a></div>`;
+    root.innerHTML = `${nav()}<div class="card">${t('watch.missingRoom')} <a href="#/">${t('nav.home')}</a></div>`;
     return;
   }
 
@@ -25,18 +26,18 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     root.innerHTML = `
       ${nav()}
       <div class="card">
-        <h2>Room not found</h2>
-        <p class="muted">“${esc(roomId)}” doesn’t exist. Ask the host for the correct link.</p>
-        <a class="btn" href="#/">Home</a>
+        <h2>${t('watch.roomNotFound')}</h2>
+        <p class="muted">${t('watch.notFoundSub', { id: esc(roomId) })}</p>
+        <a class="btn" href="#/">${t('nav.home')}</a>
       </div>`;
     return;
   }
 
   root.innerHTML = `
     ${nav()}
-    <h1>Watch ${esc(roomId)}</h1>
+    <h1>${t('watch.title', { id: esc(roomId) })}</h1>
     <p class="subtitle">
-      <a id="copy-watch-link" href="#">copy room link</a>
+      <a id="copy-watch-link" href="#">${t('watch.copyLink')}</a>
       <span id="host-state"></span>
     </p>
 
@@ -44,7 +45,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       <video id="player" class="hidden" autoplay playsinline muted></video>
       <div id="waiting">
         <div class="row">
-          <span class="mono" id="waiting-text">Waiting for the host to start broadcasting…</span>
+          <span class="mono" id="waiting-text">${t('watch.waiting')}</span>
         </div>
       </div>
     </div>
@@ -123,7 +124,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
           bitrate: 2_000_000,
         },
       });
-      av1ProbeResult = res.supported && res.smooth ? ' · AV1 decode OK' : ' · AV1 decode NO/slow';
+      av1ProbeResult = res.supported && res.smooth ? t('watch.av1Ok') : t('watch.av1Slow');
     } catch {
       av1ProbeResult = null;
     }
@@ -152,7 +153,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
         clearInterval(mediaCheckTimer);
         mediaCheckTimer = null;
       }
-      streamStatus.textContent = 'Receiving live media.';
+      streamStatus.textContent = t('watch.receiving');
       streamStatus.className = 'statusline ok';
     }
   };
@@ -215,9 +216,9 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     const check = checkStart && checkEnd ? Math.round(Math.max(0, checkEnd - checkStart)) : null;
     const first =
       tFirstFrame ? Math.round(tFirstFrame - (trackAt || tLocalDesc || 0)) : null;
-    if (gather != null) parts.push(`gather ${gather}ms`);
-    if (check != null) parts.push(`check ${check}ms`);
-    if (first != null) parts.push(`first frame ${first}ms`);
+    if (gather != null) parts.push(t('watch.gather', { ms: gather }));
+    if (check != null) parts.push(t('watch.check', { ms: check }));
+    if (first != null) parts.push(t('watch.firstFrame', { ms: first }));
     return parts.join(' · ');
   };
 
@@ -259,14 +260,14 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
             waiting.style.display = 'none';
             mediaLive = false; // re-verify this track actually renders frames
             trackAt = performance.now();
-            streamStatus.textContent = 'Connected to host — waiting for video…';
+            streamStatus.textContent = t('watch.connectedWaiting');
             streamStatus.className = 'statusline muted';
             startMediaCheck();
           },
           onStateChange: (state) => {
             const now = performance.now();
             if (state === 'connecting' && !tChecking) tChecking = now;
-            connStatus.textContent = `Peer ${state}.`;
+            connStatus.textContent = t('watch.peerState', { state });
             connStatus.className = state === 'connected' ? 'statusline ok' : 'statusline muted';
             if (state === 'connected') {
               if (!tConnected) tConnected = now;
@@ -282,7 +283,10 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
               if (tConnected && !tTerminal) {
                 // disconnect reason: how long the session was up before dying
                 tTerminal = now;
-                connStatus.textContent = `Peer ${state} after ${((now - tConnected) / 1000).toFixed(1)}s.`;
+                connStatus.textContent = t('watch.peerStateAfter', {
+                  state,
+                  s: ((now - tConnected) / 1000).toFixed(1),
+                });
               }
             }
           },
@@ -296,7 +300,7 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
         {
           maxAttempts: 2,
           onRetryAttempt: (attempt, reason) => {
-            streamStatus.textContent = `Attempt ${attempt}: ${reason}`;
+            streamStatus.textContent = t('watch.attempt', { n: attempt, reason });
             streamStatus.className = 'statusline muted';
           },
           onRetryExhausted: (reason) => {
@@ -318,7 +322,9 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
 
       return newPc;
     } catch (err) {
-      streamStatus.textContent = `Could not set up media: ${err instanceof Error ? err.message : err}`;
+      streamStatus.textContent = t('watch.setupFailed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
       streamStatus.className = 'statusline error';
       return null;
     }
@@ -346,7 +352,9 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
       flushCandidateQueue(peer, iceQueue);
     } catch (err) {
       answered = false;
-      streamStatus.textContent = `Join attempt failed: ${err instanceof Error ? err.message : err}`;
+      streamStatus.textContent = t('watch.joinFailed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
       streamStatus.className = 'statusline error';
     }
   };
@@ -358,20 +366,24 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
     onMessage: (m: ServerSignal) => handleSignal(m),
     onClose: () => {
       wsClosed = true;
-      hostState.textContent = '(signaling connection lost)';
-      if (!gotHostSignal) setWaiting('Signaling lost before the host was seen.');
+      hostState.textContent = t('watch.sigLost');
+      if (!gotHostSignal) setWaiting(t('watch.sigLostBeforeHost'));
     },
   });
 
   const handleSignal = (m: ServerSignal): void => {
     switch (m.type) {
       case 'joined':
-        hostState.textContent = `(joined as viewer · ${m.viewerCount} viewer${m.viewerCount === 1 ? '' : 's'})`;
+        hostState.textContent = t('watch.joined', {
+          n: `${m.viewerCount} ${m.viewerCount === 1 ? t('watch.viewer') : t('watch.viewers')}`,
+        });
         break;
       case 'sdp':
         if (m.from === 'host') {
           gotHostSignal = true;
-          setWaiting(m.sdp.type === 'offer' ? 'Host present — connecting…' : 'Host present.');
+          setWaiting(
+            m.sdp.type === 'offer' ? t('watch.hostPresentConnecting') : t('watch.hostPresent'),
+          );
           void handleOffer(m.sdp);
         }
         break;
@@ -382,16 +394,19 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
         }
         break;
       case 'peer-joined':
-        hostState.textContent = '(host connected)';
+        hostState.textContent = t('watch.hostConnected');
         break;
       case 'peer-left':
-        hostState.textContent = '(host left)';
+        hostState.textContent = t('watch.hostLeft');
         if (pc && pc.connectionState !== 'connected') {
-          setWaiting('Host went offline. Refresh to re-join when they return.');
+          setWaiting(t('watch.hostOffline'));
         }
         break;
       case 'error':
-        streamStatus.textContent = `${m.code}: ${m.message}`;
+        streamStatus.textContent = t('watch.serverError', {
+          code: m.code,
+          message: m.message,
+        });
         streamStatus.className = 'statusline error';
         break;
     }
@@ -400,8 +415,8 @@ export async function renderWatch(root: HTMLElement, roomId: string): Promise<vo
   // Safety: if nothing arrived within a minute, prompt the host situation.
   setTimeout(() => {
     if (!gotHostSignal && !wsClosed) {
-      hostState.textContent = '(no host detected)';
-      setWaiting('No host is broadcasting this room yet — start the native helper or the test host.');
+      hostState.textContent = t('watch.noHost');
+      setWaiting(t('watch.noHostBroadcasting'));
     }
   }, 60_000);
 

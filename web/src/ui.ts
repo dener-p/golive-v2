@@ -1,3 +1,5 @@
+import { otherLocale, t } from './i18n';
+
 export function esc(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -19,10 +21,16 @@ export function setStatus(el: HTMLElement, text: string, kind: 'ok' | 'error' | 
 }
 
 export function nav(title = 'golive'): string {
+  const toggle = otherLocale() === 'pt-BR' ? 'PT' : 'EN';
   return `
     <nav class="top">
-      <span class="brand">${title}</span>
-      <span><a href="#/">home</a> · <a href="#/host">host</a></span>
+      <span class="brand">${esc(title)}</span>
+      <span class="nav-links">
+        <a href="#/">${t('nav.home')}</a>
+        <span class="sep">·</span>
+        <a href="#/host">${t('nav.host')}</a>
+        <button class="locale-btn" id="locale-toggle" type="button" title="${t('nav.localeTitle')}">${toggle}</button>
+      </span>
     </nav>`;
 }
 
@@ -30,13 +38,13 @@ export function loginCard(metaAuth: string): HTMLElement {
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
-    <h2>Sign in to host</h2>
-    <p class="muted">Only hosts sign in — it identifies the room owner. Viewers just open the room link.</p>
+    <h2>${t('login.title')}</h2>
+    <p class="muted">${t('login.sub')}</p>
     <div class="row">
       ${
         metaAuth === 'dev'
-          ? `<button class="primary" id="dev-login">Dev login (no Discord configured)</button>`
-          : `<a class="btn primary" href="/auth/login">Log in with Discord</a>`
+          ? `<button class="primary" id="dev-login">${t('login.dev')}</button>`
+          : `<a class="btn primary" href="/auth/login">${t('login.discord')}</a>`
       }
     </div>`;
   return card;

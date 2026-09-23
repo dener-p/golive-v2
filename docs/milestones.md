@@ -139,6 +139,9 @@ warning accepted for v1.
 - [x] Validation (this machine): rebuilt release exe (golive.puhl.dev default) verified end-to-end through a public Cloudflare tunnel — download card/latest, pairing → token connect → handshake → 10-char room → `start` (SVT-AV1 live 1280×720@30, attaches room) → `stop` → idle
 - [ ] Field validation on the notebook: deploy per `docs/self-host.md` (named tunnel → `golive.puhl.dev`), release exe over LAN + phone on home Wi-Fi; M7 friend's-PC re-test pending
 - [x] Docs: `docs/host-onboarding.md` (non-developer: download → SmartScreen run-anyway → pair on host page → start/stop → troubleshooting), `docs/self-host.md` (`.env`/Discord/secret, named tunnel + config.yml, operating notes); README deployment section now points at `docs/self-host.md`
+- [x] Host-page quality selector — presets 720p30 … 4k60 (default **1080p30**) sent as `width/height/fps` in the `start` payload; helper validates against the preset set (`VideoProfile::try_from`, fallback 1080p30) and builds the matching `video/x-raw` caps; release exe rebuilt (sha256 b35ad57c); 29 helper tests pass
+- [x] pt-BR interface by default with an EN toggle — `i18n.ts` (default pt-BR, persisted choice, `<html lang>` synced), translated home/host/watch + login card + nav, nav toggle top-right
+- [x] Front-end UI polish — sticky nav with locale toggle, quality selector row, refined buttons/selects/focus states, room-code + pair-code display, card hover polish
 
 **Exit condition:** a non-developer can — on a clean Windows PC — download the helper from the
 host page, run and pair it, and stream on a normal residential network; operator redeploys do

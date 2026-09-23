@@ -129,3 +129,170 @@ nav.top {
   color: var(--text-dim);
 }
 nav.top .brand { font-weight: 700; color: var(--text); font-size: 18px; }
+
+/* --- UI polish (localization + quality selector + general refresh) -------- */
+
+nav.top {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 16px;
+  margin-bottom: 24px;
+  position: sticky;
+  top: 12px;
+  z-index: 10;
+  backdrop-filter: blur(6px);
+}
+
+nav.top .brand {
+  letter-spacing: 0.2px;
+}
+
+nav.top .nav-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+nav.top .nav-links a {
+  color: var(--text-dim);
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+nav.top .nav-links a:hover {
+  color: var(--text);
+  background: var(--bg-3);
+  text-decoration: none;
+}
+
+nav.top .sep {
+  opacity: 0.4;
+}
+
+.locale-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--accent-2);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 12px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.locale-btn:hover {
+  border-color: var(--accent-2);
+  color: var(--text);
+}
+
+h1 {
+  margin-bottom: 6px;
+  letter-spacing: -0.3px;
+}
+
+.subtitle {
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.card {
+  transition: border-color 150ms ease;
+}
+
+.card:hover {
+  border-color: #33415c;
+}
+
+.card h2 {
+  letter-spacing: -0.1px;
+}
+
+button,
+.btn,
+select {
+  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
+}
+
+button:active:not(:disabled),
+.btn:active:not(.disabled) {
+  transform: translateY(1px);
+}
+
+button:focus-visible,
+.btn:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+
+select {
+  appearance: none;
+  background: var(--bg-3) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%239aa7b4" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>')
+    no-repeat right 12px center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 32px 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quality-row {
+  margin: 12px 0 4px;
+}
+
+.quality-row label {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.room-id {
+  font-size: 18px;
+  letter-spacing: 0.8px;
+}
+
+.room-code {
+  font-size: 24px;
+  letter-spacing: 2px;
+  text-align: center;
+  padding: 10px 12px;
+  margin: 4px 0 14px;
+}
+
+#pair-code.big {
+  font-size: 28px;
+  letter-spacing: 3px;
+  color: var(--accent-2);
+}
+
+.mono-box {
+  margin-top: 6px;
+}
+
+.statusline {
+  line-height: 1.4;
+}
+
+a.btn,
+.btn {
+  text-decoration: none;
+}
+
+a.btn:hover {
+  text-decoration: none;
+}

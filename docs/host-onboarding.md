@@ -4,6 +4,8 @@ You only need a **Windows 10/11 PC** and a browser (Chrome or Edge recommended).
 No installers, no accounts beyond Discord, no terminal skills beyond one copy-paste.
 
 > Everything in this guide happens at **https://golive.puhl.dev**.
+>
+> The site defaults to **Portuguese**; click **EN/PT** in the top-right corner to switch language.
 
 ---
 
@@ -48,9 +50,11 @@ The helper authenticates with its own device token, not your browser session.
 
 ## 5. Go live
 
-1. On the host page click **Start live**. The tray tooltip/diagnostics show the
+1. Choose your **quality** next to *Start live* (default **1080p · 30 fps**;
+   options go up to **4K · 60 fps** — pick lower if the stream stutters).
+2. On the host page click **Start live**. The tray tooltip/diagnostics show the
    stream is running.
-2. Share the watch link. Viewers are anonymous — a phone/tablet/etc. can open it
+3. Share the watch link. Viewers are anonymous — a phone/tablet/etc. can open it
    straight from your message.
 
 **Stop** = *Stop live* on the host page, or the tray menu's **Stop streaming**.

@@ -29,7 +29,7 @@ use gstreamer::prelude::*;
 use log::{error, info, warn};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use protocol::{Client, Server, StartPayload};
+use protocol::{Client, Server, StartPayload, VideoProfile};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -534,6 +534,7 @@ impl App {
                     .cloned()
                     .map(|v| serde_json::from_value(v).unwrap_or_default())
                     .unwrap_or_default();
+                let profile = VideoProfile::try_from(&p).unwrap_or_default();
                 let room_id = p.room_id.unwrap_or_default();
                 if room_id.is_empty() {
                     let _ = self.out.send(Client::ack(
@@ -544,12 +545,15 @@ impl App {
                     ));
                     return;
                 }
-                self.start_stream(&room_id);
+                self.start_stream(&room_id, profile);
                 let _ = self.out.send(Client::ack(
                     id,
                     true,
                     self.state.as_str(),
-                    Some(format!("capturing into room {room_id}")),
+                    Some(format!(
+                        "capturing {}x{}@{} into room {room_id}",
+                        profile.width, profile.height, profile.fps
+                    )),
                 ));
             }
             "stop" => {
@@ -615,7 +619,7 @@ impl App {
             tray::TrayCmd::StartStream => {
                 if let Some(room) = self.current_room.clone() {
                     info!("tray: start streaming into {room}");
-                    self.start_stream(&room);
+                    self.start_stream(&room, VideoProfile::default());
                 } else {
                     info!("tray: start requested but no room attached yet — create one on the Host page");
                 }
@@ -653,13 +657,13 @@ impl App {
         chosen
     }
 
-    fn start_stream(&mut self, room_id: &str) {
+    fn start_stream(&mut self, room_id: &str, profile: VideoProfile) {
         if self.session.is_some() {
             info!("restarting stream (room {room_id})");
             self.stop_stream();
         }
         let stun = self.ensure_stun();
-        match pipeline::build(self.out.clone(), &stun) {
+        match pipeline::build(self.out.clone(), &stun, profile) {
             Ok(session) => {
                 self.current_room = Some(room_id.to_string());
                 // Set room on any viewers that were queued before stream start.

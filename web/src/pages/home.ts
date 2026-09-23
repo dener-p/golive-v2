@@ -1,6 +1,7 @@
 import { api } from '../api';
 import { devLogin, ensureUser, setUser } from '../session';
 import { nav, qs, esc, watchLink } from '../ui';
+import { t } from '../i18n';
 
 export async function renderHome(root: HTMLElement): Promise<void> {
   const user = await ensureUser();
@@ -9,23 +10,23 @@ export async function renderHome(root: HTMLElement): Promise<void> {
   root.innerHTML = `
     ${nav()}
     <h1>golive</h1>
-    <p class="subtitle">AV1 live streaming for small audiences — shared signaling skeleton (M0).</p>
+    <p class="subtitle">${t('home.subtitle')}</p>
 
     <div class="card">
-      <h2>Identity</h2>
+      <h2>${t('home.identity')}</h2>
       ${
         user
           ? `<div class="row">
-              <span class="grow">Signed in as <strong>${esc(user.username)}</strong>
+              <span class="grow">${t('home.signedInAs')} <strong>${esc(user.username)}</strong>
               <span class="muted mono">(${esc(user.id)})</span></span>
-              <button id="logout" class="small">Sign out</button>
+              <button id="logout" class="small">${t('home.signOut')}</button>
             </div>`
-          : `<div class="muted">Sign in to host a room. Watching a room needs no account — just the link.</div>
+          : `<div class="muted">${t('home.signedOutHint')}</div>
              <div class="row">
                ${
                  meta.auth === 'dev'
-                   ? `<button id="dev-login" class="primary">Dev login</button>`
-                   : `<a class="btn primary" href="/auth/login">Log in with Discord</a>`
+                   ? `<button id="dev-login" class="primary">${t('home.devLogin')}</button>`
+                   : `<a class="btn primary" href="/auth/login">${t('home.discordLogin')}</a>`
                }
              </div>`
       }
@@ -35,19 +36,19 @@ export async function renderHome(root: HTMLElement): Promise<void> {
       user
         ? `
     <div class="card">
-      <h2>Host a room</h2>
-      <p class="muted">A room is owned by you; only you can connect as its host. Viewers just need the link.</p>
-      <button id="create-room" class="primary">Create room</button>
+      <h2>${t('home.hostTitle')}</h2>
+      <p class="muted">${t('home.hostSub')}</p>
+      <button id="create-room" class="primary">${t('home.createRoom')}</button>
       <div class="statusline muted" id="create-status"></div>
     </div>`
         : ''
     }
 
     <div class="card">
-      <h2>Watch a room</h2>
+      <h2>${t('home.watchTitle')}</h2>
       <div class="row">
-        <input id="room-input" type="text" placeholder="room id (e.g. ab3x9k)" class="grow" />
-        <button id="join-room" class="primary">Watch</button>
+        <input id="room-input" type="text" placeholder="${t('home.roomPlaceholder')}" class="grow" />
+        <button id="join-room" class="primary">${t('home.watch')}</button>
       </div>
     </div>
   `;
@@ -69,20 +70,20 @@ export async function renderHome(root: HTMLElement): Promise<void> {
   createBtn?.addEventListener('click', async () => {
     const status = qs(root, '#create-status');
     createBtn.setAttribute('disabled', 'true');
-    status.textContent = 'Creating room…';
+    status.textContent = t('home.creating');
     try {
       const { room } = await api.createRoom();
       status.textContent = '';
       root.innerHTML = `
         ${nav()}
         <div class="card">
-          <h2>Room created</h2>
-          <div class="mono-box">${esc(room.roomId)}</div>
-          <p class="muted">Share this link with viewers:</p>
+          <h2>${t('home.roomCreated')}</h2>
+          <div class="mono-box room-code">${esc(room.roomId)}</div>
+          <p class="muted">${t('home.shareLink')}</p>
           <div class="mono-box" id="watch-url">${esc(window.location.origin + '/' + watchLink(room.roomId))}</div>
           <div class="row" style="margin-top:12px">
-            <a class="btn primary" href="#/host?room=${esc(room.roomId)}">Open host page</a>
-            <button id="copy-link" class="small">Copy link</button>
+            <a class="btn primary" href="#/host?room=${esc(room.roomId)}">${t('home.openHostPage')}</a>
+            <button id="copy-link" class="small">${t('home.copyLink')}</button>
           </div>
         </div>`;
       const copyBtn = root.querySelector('#copy-link');
@@ -91,7 +92,9 @@ export async function renderHome(root: HTMLElement): Promise<void> {
         void navigator.clipboard?.writeText(urlEl.textContent ?? '').catch(() => {});
       });
     } catch (err) {
-      status.textContent = `Failed to create room: ${err instanceof Error ? err.message : err}`;
+      status.textContent = t('home.createFailed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
       status.className = 'statusline error';
       createBtn.removeAttribute('disabled');
     }

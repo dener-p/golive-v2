@@ -76,13 +76,58 @@ impl Client {
     }
 }
 
-/// The `start` command payload carries the room the helper should host.
+/// The `start` command payload carries the room the helper should host plus the
+/// capture profile chosen on the host page (optional).
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StartPayload {
     pub room_id: Option<String>,
     #[allow(dead_code)]
     pub viewer_count: Option<u32>,
+    /// Capture size/FPS from the host page's quality selector (optional).
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<u32>,
+}
+
+/// Capture resolution/FPS for a live stream. The host page offers a fixed set
+/// of presets (720p30 … 4k60); anything else falls back to the 1080p30 default
+/// via `TryFrom<&StartPayload>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoProfile {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
+impl Default for VideoProfile {
+    fn default() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+        }
+    }
+}
+
+impl TryFrom<&StartPayload> for VideoProfile {
+    type Error = ();
+    fn try_from(p: &StartPayload) -> Result<Self, Self::Error> {
+        match (p.width, p.height, p.fps) {
+            (Some(width), Some(height), Some(fps)) => match (width, height, fps) {
+                (1280, 720, 30)
+                | (1280, 720, 60)
+                | (1920, 1080, 30)
+                | (1920, 1080, 60)
+                | (2560, 1440, 30)
+                | (2560, 1440, 60)
+                | (3840, 2160, 30)
+                | (3840, 2160, 60) => Ok(Self { width, height, fps }),
+                _ => Err(()),
+            },
+            _ => Err(()),
+        }
+    }
 }
 
 /// Mirrors `IceServerInfo` from the shared protocol: `urls` may be a single
@@ -155,4 +200,63 @@ pub enum Server {
 
 pub fn parse_server(raw: &str) -> Option<Server> {
     serde_json::from_str::<Server>(raw).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_profile_is_1080p30() {
+        let d = VideoProfile::default();
+        assert_eq!((d.width, d.height, d.fps), (1920, 1080, 30));
+    }
+
+    #[test]
+    fn payload_presets_accepted() {
+        // Every host-page preset maps through TryFrom.
+        for (w, h, f) in [
+            (1280, 720, 30),
+            (1280, 720, 60),
+            (1920, 1080, 30),
+            (1920, 1080, 60),
+            (2560, 1440, 30),
+            (2560, 1440, 60),
+            (3840, 2160, 30),
+            (3840, 2160, 60),
+        ] {
+            let p = StartPayload {
+                width: Some(w),
+                height: Some(h),
+                fps: Some(f),
+                ..StartPayload::default()
+            };
+            assert_eq!(
+                VideoProfile::try_from(&p),
+                Ok(VideoProfile { width: w, height: h, fps: f })
+            );
+        }
+    }
+
+    #[test]
+    fn payload_without_profile_falls_back_to_default() {
+        let none = StartPayload::default();
+        assert_eq!(VideoProfile::try_from(&none), Err(()));
+        let partial = StartPayload {
+            width: Some(1920),
+            ..StartPayload::default()
+        };
+        assert_eq!(VideoProfile::try_from(&partial), Err(()));
+    }
+
+    #[test]
+    fn non_preset_sizes_rejected() {
+        let p = StartPayload {
+            width: Some(1234),
+            height: Some(999),
+            fps: Some(30),
+            ..StartPayload::default()
+        };
+        assert_eq!(VideoProfile::try_from(&p), Err(()));
+    }
 }

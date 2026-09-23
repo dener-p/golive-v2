@@ -5,7 +5,7 @@
 //! ```text
 //! d3d11screencapturesrc show-cursor=true
 //!   -> d3d11convert -> d3d11download            (GPU -> system memory)
-//!   -> videoconvert -> videorate -> videoscale  -> 1280x720 @30
+//!   -> videoconvert -> videorate -> videoscale  -> host-chosen profile (default 1920x1080 @30)
 //!   -> svtav1enc preset=12 crf=36
 //!   -> rtpav1pay -> queue -> tee
 //! ```
@@ -22,7 +22,7 @@ use gstreamer::prelude::*;
 use gstreamer::PadLinkCheck;
 use log::{error, info, warn};
 
-use crate::protocol::{Client, IceCandidate, SdpMessage};
+use crate::protocol::{Client, IceCandidate, SdpMessage, VideoProfile};
 
 // ---------------------------------------------------------------------------
 // Per-viewer context (written by the app loop, read by signal callbacks)
@@ -137,21 +137,23 @@ pub fn normalize_stun_url(url: &str) -> String {
 pub fn build(
     out: tokio::sync::mpsc::UnboundedSender<Client>,
     stun_server: &str,
+    profile: VideoProfile,
 ) -> Result<StreamSession> {
-    let desc = concat!(
-        "d3d11screencapturesrc show-cursor=true ",
-        "! d3d11convert ! video/x-raw(memory:D3D11Memory) ",
-        "! d3d11download ! video/x-raw(memory:SystemMemory) ",
-        "! videoconvert ! videorate ! videoscale ",
-        "! video/x-raw,width=1280,height=720,framerate=30/1 ",
-        "! svtav1enc preset=12 crf=36 intra-period-length=60 parameters-string=\"pred-struct=1\" ",
-        "! av1parse ",
-        "! rtpav1pay ",
-        "! queue ",
-        "! tee name=t"
+    let desc = format!(
+        "d3d11screencapturesrc show-cursor=true \
+         ! d3d11convert ! video/x-raw(memory:D3D11Memory) \
+         ! d3d11download ! video/x-raw(memory:SystemMemory) \
+         ! videoconvert ! videorate ! videoscale \
+         ! video/x-raw,width={},height={},framerate={}/1 \
+         ! svtav1enc preset=12 crf=36 intra-period-length=60 parameters-string=\"pred-struct=1\" \
+         ! av1parse \
+         ! rtpav1pay \
+         ! queue \
+         ! tee name=t",
+        profile.width, profile.height, profile.fps
     );
 
-    let bin = gstreamer::parse::bin_from_description_with_name(desc, false, "golive-stream")
+    let bin = gstreamer::parse::bin_from_description_with_name(&desc, false, "golive-stream")
         .map_err(|e| anyhow!("pipeline parse failed: {}", e))?;
 
     let pipeline = gstreamer::Pipeline::new();
@@ -628,7 +630,8 @@ mod tests {
     fn test_pipeline_offer() {
         gstreamer::init().unwrap();
         let (out, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = build(out, DEFAULT_STUN_SERVER).expect("build pipeline");
+        let mut session = build(out, DEFAULT_STUN_SERVER, VideoProfile::default())
+            .expect("build pipeline");
         play(&session).expect("play pipeline");
         let peer_id = "test-viewer-1";
         add_viewer(&mut session, peer_id).expect("add viewer");
