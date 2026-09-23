@@ -33,6 +33,25 @@ use protocol::{Client, Server, StartPayload};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Passed by the "Start with Windows" Run entry so the helper hides its console
+/// window at logon (see `autostart::run_value`). Must be filtered out before
+/// subcommand dispatch so it never reads as an unknown subcommand.
+const HIDDEN_CONSOLE_FLAG: &str = "--hidden-console";
+
+/// Hide this process's console window. Used on autostart so Windows doesn't
+/// flash a black window at logon; the console still exists, so log output keeps
+/// flowing — it's just visually hidden. No-op when the process owns no console.
+fn hide_console() {
+    use windows_sys::Win32::System::Console::GetConsoleWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if !hwnd.is_null() {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Inbound {
     Server(Server),
@@ -109,7 +128,15 @@ fn main() {
         .install_default()
         .expect("failed to install rustls crypto provider");
 
-    let args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    let hidden_console = raw_args.iter().any(|a| a == HIDDEN_CONSOLE_FLAG);
+    let args: Vec<String> = raw_args
+        .into_iter()
+        .filter(|a| a != HIDDEN_CONSOLE_FLAG)
+        .collect();
+    if hidden_console {
+        hide_console();
+    }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
