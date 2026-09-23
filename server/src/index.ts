@@ -32,6 +32,19 @@ import {
 const app = new Hono();
 app.use(logger());
 
+// ---------------------------------------------------------------------------
+// Liveness probe (public — tunnel/Uptime checks can hit this without auth)
+// ---------------------------------------------------------------------------
+
+const startedAt = Date.now();
+app.get('/healthz', (c) =>
+  c.json({
+    ok: true,
+    uptimeMs: Date.now() - startedAt,
+    auth: isDevAuth ? 'dev' : 'discord',
+  }),
+);
+
 app.route('/auth', authApp);
 app.route('/api', apiApp);
 app.route('/api/rooms', roomsApp);
@@ -308,6 +321,16 @@ setInterval(() => {
 }, HELPER_PING_INTERVAL_MS);
 
 // ---------------------------------------------------------------------------
+// Startup guard + serve
+// ---------------------------------------------------------------------------
+
+// P4 hardening: never boot a real deployment with a well-known session secret.
+// Dev-auth mode (no Discord credentials) is exempt — it's meant for local runs.
+if (!isDevAuth && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === 'dev-secret-change-me')) {
+  console.error('[golive] refusing to start: SESSION_SECRET is missing or still the default while Discord OAuth is configured.');
+  console.error('[golive] generate one, e.g.  openssl rand -hex 32 , and put it in .env');
+  process.exit(1);
+}
 
 const server = Bun.serve({ port: config.port, fetch: app.fetch, websocket });
 console.log(`[golive] signaling backend on ${config.baseUrl}`);

@@ -13,6 +13,7 @@ import {
   revokeBearerToken,
   revokeHelperToken,
 } from '../tokens';
+import { rateLimit } from '../rateLimit';
 
 export const apiApp = new Hono();
 
@@ -27,30 +28,38 @@ apiApp.get('/meta', (c) =>
 // Helper pairing (host browser mint → helper exchange → long-lived token)
 // ---------------------------------------------------------------------------
 
-apiApp.post('/pair', (c) => {
-  const user = requireUser(c);
-  if (!user) return c.json({ error: 'unauthorized' }, 401);
-  const { code, expiresInSeconds } = createPairingCode(user);
-  return c.json({ code, expiresInSeconds });
-});
+apiApp.post(
+  '/pair',
+  rateLimit({ scope: 'pair:mint', limit: 10, windowMs: 60_000 }),
+  (c) => {
+    const user = requireUser(c);
+    if (!user) return c.json({ error: 'unauthorized' }, 401);
+    const { code, expiresInSeconds } = createPairingCode(user);
+    return c.json({ code, expiresInSeconds });
+  },
+);
 
-apiApp.post('/pair/exchange', async (c) => {
-  let body: unknown = null;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'bad_request' }, 400);
-  }
-  const { code, deviceName } = (body ?? {}) as { code?: unknown; deviceName?: unknown };
-  if (typeof code !== 'string' || code.length > 12) {
-    return c.json({ error: 'invalid_code' }, 400);
-  }
-  const user = consumePairingCode(code);
-  if (!user) return c.json({ error: 'code_invalid_or_expired' }, 410);
-  const issued = issueHelperToken(user, typeof deviceName === 'string' ? deviceName : undefined);
-  if (!issued) return c.json({ error: 'too_many_devices' }, 409);
-  return c.json({ token: issued.token, userId: user.id, deviceId: issued.id });
-});
+apiApp.post(
+  '/pair/exchange',
+  rateLimit({ scope: 'pair:exchange', limit: 10, windowMs: 60_000 }),
+  async (c) => {
+    let body: unknown = null;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'bad_request' }, 400);
+    }
+    const { code, deviceName } = (body ?? {}) as { code?: unknown; deviceName?: unknown };
+    if (typeof code !== 'string' || code.length > 12) {
+      return c.json({ error: 'invalid_code' }, 400);
+    }
+    const user = consumePairingCode(code);
+    if (!user) return c.json({ error: 'code_invalid_or_expired' }, 410);
+    const issued = issueHelperToken(user, typeof deviceName === 'string' ? deviceName : undefined);
+    if (!issued) return c.json({ error: 'too_many_devices' }, 409);
+    return c.json({ token: issued.token, userId: user.id, deviceId: issued.id });
+  },
+);
 
 apiApp.get('/pair/tokens', (c) => {
   const user = requireUser(c);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createRoom, getRoom, toRoomInfo } from '../src/store';
+import { createRoom, getRoom, toRoomInfo, ROOM_ID_LENGTH } from '../src/store';
 import type { PublicUser } from '@golive/shared';
 
 const USER: PublicUser = { id: 'u1', username: 'alice', avatar: null };
@@ -9,7 +9,7 @@ describe('room store', () => {
     const a = createRoom(USER);
     const b = createRoom(USER);
     expect(a.roomId).not.toEqual(b.roomId);
-    expect(a.roomId).toHaveLength(6);
+    expect(a.roomId).toHaveLength(ROOM_ID_LENGTH);
     expect(a.hostId).toBe('u1');
   });
 

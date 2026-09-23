@@ -8,6 +8,7 @@ export interface Config {
   discordClientSecret?: string;
   stunServers: string[];
   turn: { urls: string[]; username: string; credential: string } | null;
+  rateLimitsEnabled: boolean;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -34,6 +35,7 @@ export const config: Config = {
         credential: process.env.TURN_CREDENTIAL ?? '',
       }
     : null,
+  rateLimitsEnabled: process.env.RATE_LIMITS !== 'off',
 };
 
 /** True when Discord OAuth is not configured → instant dev-auth mode. */

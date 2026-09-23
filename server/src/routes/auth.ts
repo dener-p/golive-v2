@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createSession, destroySession } from '../sessions';
 import { requireUser } from '../http';
 import { config, isDevAuth } from '../config';
+import { rateLimit } from '../rateLimit';
 import { DEV_USER, discordAuthorizeUrl, exchangeCodeForToken, fetchDiscordUser } from '../discord';
 
 export const authApp = new Hono();
@@ -22,26 +23,34 @@ function setSessionCookie(c: Parameters<typeof setCookie>[0], token: string): vo
 
 // --- Login ---------------------------------------------------------------
 
-authApp.post('/login', (c) => {
-  if (isDevAuth) {
-    setSessionCookie(c, createSession(DEV_USER));
-    return c.json({ user: DEV_USER, dev: true });
-  }
-  const state = randomBytes(16).toString('hex');
-  setCookie(c, 'oauth_state', state, {
-    httpOnly: true,
-    sameSite: 'Lax',
-    path: '/',
-    maxAge: 600,
-  });
-  return c.redirect(discordAuthorizeUrl(state));
-});
+authApp.post(
+  '/login',
+  rateLimit({ scope: 'auth:login', limit: 20, windowMs: 60_000 }),
+  (c) => {
+    if (isDevAuth) {
+      setSessionCookie(c, createSession(DEV_USER));
+      return c.json({ user: DEV_USER, dev: true });
+    }
+    const state = randomBytes(16).toString('hex');
+    setCookie(c, 'oauth_state', state, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 600,
+    });
+    return c.redirect(discordAuthorizeUrl(state));
+  },
+);
 
-authApp.post('/dev', (c) => {
-  if (!isDevAuth) return c.json({ error: 'dev_auth_disabled' }, 403);
-  setSessionCookie(c, createSession(DEV_USER));
-  return c.json({ user: DEV_USER });
-});
+authApp.post(
+  '/dev',
+  rateLimit({ scope: 'auth:dev', limit: 20, windowMs: 60_000 }),
+  (c) => {
+    if (!isDevAuth) return c.json({ error: 'dev_auth_disabled' }, 403);
+    setSessionCookie(c, createSession(DEV_USER));
+    return c.json({ user: DEV_USER });
+  },
+);
 
 // --- OAuth callback ------------------------------------------------------
 

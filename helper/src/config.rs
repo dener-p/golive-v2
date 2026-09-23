@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Backend used when nothing (env/config) says otherwise.
-pub const DEFAULT_BASE_URL: &str = "https://api-golive.puhl.dev";
+pub const DEFAULT_BASE_URL: &str = "https://golive.puhl.dev";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct HelperConfig {

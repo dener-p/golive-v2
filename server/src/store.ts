@@ -4,6 +4,9 @@ import type { PublicUser, RoomInfo } from '@golive/shared';
 /** Ambiguity-free alphabet (no l, o, 0, 1). */
 const ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 
+/** 10 chars over a 32-symbol alphabet ≈ 50 bits — room links are unguessable. */
+export const ROOM_ID_LENGTH = 10;
+
 export interface TurnConfig {
   urls: string[];
   username: string;
@@ -20,7 +23,7 @@ export interface Room {
 
 const rooms = new Map<string, Room>();
 
-function generateRoomId(length = 6): string {
+function generateRoomId(length = ROOM_ID_LENGTH): string {
   let id = '';
   for (let i = 0; i < length; i++) {
     id += ID_ALPHABET[Math.floor(Math.random() * ID_ALPHABET.length)];
