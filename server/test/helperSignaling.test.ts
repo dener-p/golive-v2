@@ -27,7 +27,7 @@ function socket(id: string): SignalingSocket & { sent: ServerSignal[] } {
 describe('helper-as-host signaling (over /ws/helper)', () => {
   test('hello-ack carries the ICE server list (STUN; TURN when configured)', () => {
     const ack = helloAck();
-    expect(ack).toMatchObject({ type: 'hello-ack' });
+    if (ack.type !== 'hello-ack') throw new Error(`expected hello-ack, got: ${ack.type}`);
     expect(Array.isArray(ack.iceServers)).toBe(true);
     expect((ack.iceServers ?? []).length).toBeGreaterThan(0);
     // STUN entries appear as url strings; at least one Google STUN by default.
