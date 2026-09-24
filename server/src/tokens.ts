@@ -1,5 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import type { PublicUser } from '@golive/shared';
+import { db } from './db/client';
+import { helperTokenTable } from './db/schema';
 
 /**
  * Helper pairing + long-lived device tokens.
@@ -12,7 +15,9 @@ import type { PublicUser } from '@golive/shared';
  *   3. The helper sends `Authorization: Bearer <token>` on every `/ws/helper`
  *      connection until the host revokes it (or the helper unpairs).
  *
- * In-memory, single process — same trade-off as sessions.ts.
+ * Pairing codes stay ephemeral (in-memory, 5-min single-use). Helper tokens are
+ * persisted in SQLite (Turso in production) so a backend restart does not
+ * invalidate every friend's already-paired helper.
  */
 
 /** How long a pairing code stays valid. */
@@ -37,12 +42,32 @@ export interface HelperTokenRecord {
   createdAt: number;
 }
 
+interface StoredToken extends HelperTokenRecord {
+  tokenHash: string;
+}
+
 const pairingCodes = new Map<string, PairingCodeEntry>();
-/** Key: sha256(raw token). */
-const helperTokens = new Map<string, HelperTokenRecord>();
+/** Key: sha256(raw token). In-memory mirror of `helperTokenTable`. */
+const helperTokens = new Map<string, StoredToken>();
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** Rebuild the in-memory mirror from the database (startup). */
+export async function loadHelperTokens(): Promise<void> {
+  const rows = await db.select().from(helperTokenTable).all();
+  helperTokens.clear();
+  for (const row of rows) {
+    helperTokens.set(row.tokenHash, {
+      tokenHash: row.tokenHash,
+      id: row.id,
+      userId: row.userId,
+      user: { id: row.userId, username: row.username, avatar: row.avatar },
+      deviceName: row.deviceName,
+      createdAt: row.createdAt,
+    });
+  }
 }
 
 // --- pairing codes ---------------------------------------------------------
@@ -83,13 +108,27 @@ export function issueHelperToken(
   if (helperTokensFor(user.id).length >= MAX_HELPER_TOKENS_PER_USER) return null;
   const token = randomBytes(32).toString('base64url');
   const id = randomBytes(6).toString('hex');
-  helperTokens.set(hash(token), {
+  const record: StoredToken = {
+    tokenHash: hash(token),
     id,
     userId: user.id,
     user,
     deviceName: deviceName?.trim().slice(0, 64) ?? '',
     createdAt: Date.now(),
-  });
+  };
+  helperTokens.set(record.tokenHash, record);
+  void db
+    .insert(helperTokenTable)
+    .values({
+      tokenHash: record.tokenHash,
+      id,
+      userId: user.id,
+      username: user.username,
+      avatar: user.avatar,
+      deviceName: record.deviceName,
+      createdAt: record.createdAt,
+    })
+    .catch((err) => console.error('[golive] helper token persist failed:', err));
   return { id, token };
 }
 
@@ -106,7 +145,15 @@ export function revokeBearerToken(authorization: string | null | undefined): boo
   if (!authorization) return false;
   const value = authorization.trim().replace(/^Bearer\s+/i, '');
   if (!value) return false;
-  return helperTokens.delete(hash(value));
+  const key = hash(value);
+  const had = helperTokens.delete(key);
+  if (had) {
+    void db
+      .delete(helperTokenTable)
+      .where(eq(helperTokenTable.tokenHash, key))
+      .catch((err) => console.error('[golive] helper token revoke failed:', err));
+  }
+  return had;
 }
 
 // --- device management (host UI) ------------------------------------------
@@ -119,6 +166,10 @@ export function revokeHelperToken(userId: string, id: string): boolean {
   for (const [key, record] of helperTokens) {
     if (record.id === id && record.userId === userId) {
       helperTokens.delete(key);
+      void db
+        .delete(helperTokenTable)
+        .where(and(eq(helperTokenTable.id, id), eq(helperTokenTable.userId, userId)))
+        .catch((err) => console.error('[golive] helper token revoke failed:', err));
       return true;
     }
   }
@@ -129,4 +180,5 @@ export function revokeHelperToken(userId: string, id: string): boolean {
 export function resetTokensForTests(): void {
   pairingCodes.clear();
   helperTokens.clear();
+  void db.delete(helperTokenTable);
 }

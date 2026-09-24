@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import './setup';
 import type { PublicUser } from '@golive/shared';
 import {
   consumePairingCode,

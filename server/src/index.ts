@@ -15,6 +15,10 @@ import {
   type SignalingSocket,
 } from './signaling';
 import { attachHelperToRoom, helloAck, helperSignalingSocket } from './helperSignaling';
+import { runMigrations } from './db/client';
+import { loadRooms, sweepExpiredRooms } from './store';
+import { loadSessions } from './sessions';
+import { loadHelperTokens } from './tokens';
 import {
   registerHelper,
   unregisterHelper,
@@ -320,6 +324,12 @@ setInterval(() => {
   sweepStaleHelpers();
 }, HELPER_PING_INTERVAL_MS);
 
+// Rooms expire: periodic sweep keeps the store (and session-free watch links)
+// tidy between accesses. Lazy expiry on read is the source of truth.
+setInterval(() => {
+  sweepExpiredRooms();
+}, 15 * 60 * 1000);
+
 // ---------------------------------------------------------------------------
 // Startup guard + serve
 // ---------------------------------------------------------------------------
@@ -331,6 +341,21 @@ if (!isDevAuth && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET ===
   console.error('[golive] generate one, e.g.  openssl rand -hex 32 , and put it in .env');
   process.exit(1);
 }
+
+// Database: apply migrations and rebuild the in-memory mirrors (sessions,
+// helper tokens, rooms) so restarts no longer log out hosts, un-pair helpers,
+// or destroy watch links.
+async function startDatabase(): Promise<void> {
+  try {
+    await runMigrations();
+    await Promise.all([loadSessions(), loadHelperTokens(), loadRooms()]);
+  } catch (err) {
+    console.error('[golive] database setup failed (DATABASE_URL / DATABASE_AUTH_TOKEN?):', err);
+    process.exit(1);
+  }
+  console.log(`[golive] database: ${config.databaseUrl.includes('libsql:') ? 'Turso (libsql)' : 'local SQLite'}`);
+}
+await startDatabase();
 
 const server = Bun.serve({ port: config.port, fetch: app.fetch, websocket });
 console.log(`[golive] signaling backend on ${config.baseUrl}`);

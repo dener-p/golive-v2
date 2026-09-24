@@ -9,6 +9,10 @@ export interface Config {
   stunServers: string[];
   turn: { urls: string[]; username: string; credential: string } | null;
   rateLimitsEnabled: boolean;
+  databaseUrl: string;
+  databaseAuthToken?: string;
+  /** Rooms stop being joinable this many hours after creation. */
+  roomTtlHours: number;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -36,7 +40,15 @@ export const config: Config = {
       }
     : null,
   rateLimitsEnabled: process.env.RATE_LIMITS !== 'off',
+  databaseUrl: process.env.DATABASE_URL?.trim() || 'file:./data/golive.db',
+  databaseAuthToken: process.env.DATABASE_AUTH_TOKEN?.trim() || undefined,
+  roomTtlHours: parsePositiveHours(process.env.ROOM_TTL_HOURS, 24),
 };
+
+function parsePositiveHours(value: string | undefined, fallback: number): number {
+  const n = Number(value ?? fallback);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 /** True when Discord OAuth is not configured → instant dev-auth mode. */
 export const isDevAuth = !config.discordClientId || !config.discordClientSecret;

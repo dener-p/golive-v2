@@ -21,5 +21,8 @@ Thumbs.db
 # Rust build artifacts
 helper/target/
 
+# Local SQLite database (Turso replaces this in production)
+server/data/
+
 # Bun
 bun.lockb

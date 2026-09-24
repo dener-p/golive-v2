@@ -149,7 +149,8 @@ not silently break helper auth.
 
 ## Notes for later milestones
 
-- Signaling state lives in memory (single process). Multi-process/durable storage is deferred until it's actually needed (M5+).
-- Session store is also in-memory; rotate to signed stateless cookies or a DB when deploying multi-process.
+- Signaling *live* state (rooms ↔ WebSocket members) stays in memory (single process). Multi-process/durable signaling is deferred until it's actually needed (M5+).
+- Sessions, helper tokens, and rooms are now persisted in SQLite via Drizzle (Turso in production) — backend restarts no longer log out hosts, un-pair helpers, or destroy watch links (pairing codes stay in-memory by design; they're 5-minute single-use).
+- Rooms have a TTL (`ROOM_TTL_HOURS`, default 24 h): watch links expire after that, enforced lazily on access plus a periodic sweep.
 - The browser-emulated host is a *test* instrument, not a product path — the real host is the native helper (M2+).
 - TURN (M3) is optional STUN-first recovery only; there is never a GoLive/shared TURN fallback (see `project.md` §4.3).

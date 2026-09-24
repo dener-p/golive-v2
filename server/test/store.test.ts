@@ -1,8 +1,11 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { resetAllForTests } from './setup';
 import { createRoom, getRoom, toRoomInfo, ROOM_ID_LENGTH } from '../src/store';
 import type { PublicUser } from '@golive/shared';
 
 const USER: PublicUser = { id: 'u1', username: 'alice', avatar: null };
+
+beforeEach(async () => resetAllForTests());
 
 describe('room store', () => {
   test('creates rooms with unique short ids', () => {

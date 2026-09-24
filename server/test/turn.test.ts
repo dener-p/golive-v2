@@ -1,8 +1,11 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { resetAllForTests } from './setup';
 import { createRoom, setRoomTurn, getRoomTurn } from '../src/store';
 import type { PublicUser } from '@golive/shared';
 
 const HOST: PublicUser = { id: 'host-1', username: 'Hosti', avatar: null };
+
+beforeEach(async () => resetAllForTests());
 
 describe('room TURN config', () => {
   test('set and get TURN config for a room', () => {

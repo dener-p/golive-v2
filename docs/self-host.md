@@ -34,11 +34,14 @@ bun install
 ### 2. `.env` (copy from `.env.example`, edit)
 
 ```env
-PORT=8787
+PORT=3000
 BASE_URL=https://golive.puhl.dev
 SESSION_SECRET=<random 64 hex chars>
 DISCORD_CLIENT_ID=<your app id>
 DISCORD_CLIENT_SECRET=<your app secret>
+DATABASE_URL=libsql://golive-<db>.turso.io
+DATABASE_AUTH_TOKEN=<turso token>
+ROOM_TTL_HOURS=24
 ```
 
 - **SESSION_SECRET** — generate with `bun -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
@@ -48,6 +51,12 @@ DISCORD_CLIENT_SECRET=<your app secret>
   `https://golive.puhl.dev/auth/callback` (no trailing slash). Scope: `identify`.
   Leave both values empty to run in **dev-auth mode** (instant login as "Dev User") —
   fine for a private test, not for real use.
+- **DATABASE_URL** — sessions, helper tokens, and rooms are persisted in SQLite via
+  libsql. Point it at **Turso** (`libsql://…` + `DATABASE_AUTH_TOKEN`) for the
+  notebook deployment. The default is a local file (`file:./data/golive.db`, in
+  `server/data/`, gitignored) — fine for a throwaway test run.
+- **ROOM_TTL_HOURS** — watch links stop working this many hours after the room is
+  created (default 24). Expiry is lazy (checked on access) plus a periodic sweep.
 - `RATE_LIMITS` stays on (default). Only set `RATE_LIMITS=off` for local dev loops.
 - STUN server defaults are fine. TURN is optional host-provided recovery — see below.
 
@@ -60,8 +69,8 @@ bun run start   # server, listens on $PORT
 
 Smoke checks:
 
-- `curl http://localhost:8787/healthz` → `{"ok":true,…}`
-- `curl http://localhost:8787/api/helper/latest` → version/file/sha256 of the helper.
+- `curl http://localhost:3000/healthz` → `{"ok":true,…}`
+- `curl http://localhost:3000/api/helper/latest` → version/file/sha256 of the helper.
 
 ## Cloudflare tunnel (name it, don't quick-tunnel your real domain)
 
@@ -105,13 +114,14 @@ Verify from the outside: `curl https://golive.puhl.dev/healthz`.
 
 ## Operating notes
 
-- **In-memory state.** Sessions, pairing codes, helper tokens, and rooms live in
-  server memory. After a backend restart:
-  - hosts must log in again,
-  - paired helpers lose their token — the helper detects the rejection and tells
-    the user to `unpair` and re-pair from the host page,
-  - rooms are gone; open a new room and re-share the watch link.
-  Restarts are cheap; just know they invalidate pairings.
+- **Persistent state lives in SQLite (Turso in production).** Sessions, helper
+  tokens, and rooms survive backend restarts — hosts stay logged in, paired
+  helpers keep their token, watch links stay valid. The exception is the
+  **pairing code**, which is short-lived (5 min, single-use) and in-memory by
+  design; a restart just means minting a new code.
+- **Rooms expire.** Watch links stop working `ROOM_TTL_HOURS` (default 24 h)
+  after the room is created; expired rooms are dropped on access and by a
+  periodic sweep. Re-share a fresh watch link if an old one stops resolving.
 - **One instance.** One helper per account is enforced per instance (last connection
   wins). Don't run two backend instances against the same helpers/user tokens.
 - **Update the helper.** Rebuild with `powershell -ExecutionPolicy Bypass -File tools/release/build.ps1`
@@ -128,4 +138,5 @@ Verify from the outside: `curl https://golive.puhl.dev/healthz`.
   `Retry-After`; don't just disable limits, raise `limit`/`windowMs` in the route
   config instead.
 - **Backups.** The only durable data on the operator side is `.env`; the exe is in
-  git. Keep `.env` in a password manager or bitwarden export, not in the repo.
+  git, and the database is remote Turso (or a local file for throwaway runs). Keep
+  `.env` in a password manager or bitwarden export, not in the repo.

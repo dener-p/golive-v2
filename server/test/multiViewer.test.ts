@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import './setup';
 import { createRoom } from '../src/store';
 import { handleSignal, joinSignaling, leaveSignaling, type SignalingSocket } from '../src/signaling';
 import { attachHelperToRoom, helperSignalingSocket } from '../src/helperSignaling';
