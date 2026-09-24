@@ -91,7 +91,7 @@ credentials-file: C:\Users\<you>\.cloudflared\<tunnel-id>.json
 
 ingress:
   - hostname: golive.puhl.dev
-    service: http://localhost:8787
+    service: http://localhost:3000
   - service: http_status:404
 ```
 
