@@ -32,11 +32,17 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
   let disposed = false;
   /** Command id we most recently sent; used to report its ack (or staleness). */
   let lastSentId: string | null = null;
+  /** In-flight Start/Stop; the toggle button shows a progress state while set. */
+  let pendingToggle: 'starting' | 'stopping' | null = null;
+  let toggleTimeout: ReturnType<typeof setTimeout> | null = null;
+  /** Last helper status snapshot, for re-rendering the toggle outside polls. */
+  let lastStatus: { connected: boolean; state: string | null } = { connected: false, state: null };
 
   const cleanup = (): void => {
     disposed = true;
     if (pollTimer) clearInterval(pollTimer);
     if (pairExpiryTimer) clearTimeout(pairExpiryTimer);
+    if (toggleTimeout) clearTimeout(toggleTimeout);
   };
   window.addEventListener('pagehide', cleanup);
 
@@ -87,8 +93,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           </select>
         </div>
         <div class="row">
-          <button id="cmd-start" class="primary" disabled>${t('host.startLive')}</button>
-          <button id="cmd-stop" class="danger" disabled>${t('host.stopLive')}</button>
+          <button id="cmd-toggle" class="primary" disabled>${t('host.startLive')}</button>
           <button id="cmd-nat-test" class="small" disabled>${t('host.natTest')}</button>
           <button id="cmd-nat-map" class="small" disabled>${t('host.natMap')}</button>
         </div>
@@ -165,18 +170,26 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     }
 
     // helper commands
-    root.querySelector('#cmd-start')?.addEventListener('click', () => {
-      if (!roomId) return;
-      const sel = root.querySelector('#quality-select') as HTMLSelectElement | null;
-      const preset = presetById(sel?.value);
-      void sendCommand('start', {
-        roomId,
-        width: preset.width,
-        height: preset.height,
-        fps: preset.fps,
-      });
+    root.querySelector('#cmd-toggle')?.addEventListener('click', () => {
+      const live = pendingToggle === 'stopping' || lastStatus.state === 'live';
+      if (live) {
+        pendingToggle = 'stopping';
+        void sendCommand('stop');
+      } else {
+        if (!roomId) return;
+        const sel = root.querySelector('#quality-select') as HTMLSelectElement | null;
+        const preset = presetById(sel?.value);
+        pendingToggle = 'starting';
+        void sendCommand('start', {
+          roomId,
+          width: preset.width,
+          height: preset.height,
+          fps: preset.fps,
+        });
+      }
+      armToggleTimeout();
+      applyToggleButton(lastStatus);
     });
-    root.querySelector('#cmd-stop')?.addEventListener('click', () => void sendCommand('stop'));
     root.querySelector('#cmd-nat-test')?.addEventListener('click', () => void sendCommand('nat-test'));
     root.querySelector('#cmd-nat-map')?.addEventListener('click', () => void sendCommand('nat-map'));
 
@@ -330,6 +343,51 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
     void refreshHelper();
   };
 
+  // --- start/stop toggle -----------------------------------------------------
+  const clearPendingToggle = (): void => {
+    pendingToggle = null;
+    if (toggleTimeout) {
+      clearTimeout(toggleTimeout);
+      toggleTimeout = null;
+    }
+  };
+
+  const armToggleTimeout = (): void => {
+    if (toggleTimeout) clearTimeout(toggleTimeout);
+    toggleTimeout = setTimeout(() => {
+      clearPendingToggle();
+      applyToggleButton(lastStatus);
+    }, 15_000);
+  };
+
+  /**
+   * One button that reflects what the helper is doing:
+   * offline → disabled "Start live"; idle/error → enabled "Start live";
+   * live → enabled danger "Stop live"; in-flight command → disabled progress label.
+   */
+  const applyToggleButton = (s: { connected: boolean; state: string | null }): void => {
+    const btn = root.querySelector('#cmd-toggle') as HTMLButtonElement | null;
+    const qualitySel = root.querySelector('#quality-select') as HTMLSelectElement | null;
+    if (!btn) return;
+    const live = s.state === 'live' || pendingToggle === 'stopping';
+    if (qualitySel) qualitySel.disabled = !s.connected || live || pendingToggle === 'starting';
+    if (pendingToggle === 'starting' || pendingToggle === 'stopping') {
+      btn.disabled = true;
+      btn.className = pendingToggle === 'starting' ? 'primary' : 'danger';
+      btn.textContent = t(pendingToggle === 'starting' ? 'host.starting' : 'host.stopping');
+      return;
+    }
+    if (live) {
+      btn.disabled = false;
+      btn.className = 'danger';
+      btn.textContent = t('host.stopLive');
+      return;
+    }
+    btn.disabled = !s.connected;
+    btn.className = 'primary';
+    btn.textContent = t('host.startLive');
+  };
+
   /** Fill the download card / version hint under the helper badge. */
   const fillHelperDl = (connected = false, helperVersion?: string | null): void => {
     const dl = root.querySelector('#helper-dl');
@@ -374,11 +432,10 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       const version = root.querySelector('#helper-version');
       const seen = root.querySelector('#helper-last-seen');
       const out = root.querySelector('#command-result') as HTMLElement | null;
-      const startBtn = root.querySelector('#cmd-start') as HTMLButtonElement | null;
-      const stopBtn = root.querySelector('#cmd-stop') as HTMLButtonElement | null;
       const natBtn = root.querySelector('#cmd-nat-test') as HTMLButtonElement | null;
-      const qualitySel = root.querySelector('#quality-select') as HTMLSelectElement | null;
       if (!badge || !seen) return;
+      lastStatus = { connected: status.connected, state: status.state ?? null };
+      const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
       if (status.connected) {
         badge.textContent = t('host.helperConnectedState', { state: status.state ?? 'idle' });
         badge.className = 'badge ok';
@@ -386,11 +443,7 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         seen.textContent = t('host.lastSeen', {
           time: new Date(status.lastSeenAt!).toLocaleTimeString(),
         });
-        if (startBtn) startBtn.disabled = false;
-        if (stopBtn) stopBtn.disabled = false;
         if (natBtn) natBtn.disabled = false;
-        if (qualitySel) qualitySel.disabled = false;
-        const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
         if (mapBtn) mapBtn.disabled = false;
         fillHelperDl(true, status.helperVersion ? String(status.helperVersion) : undefined);
       } else {
@@ -398,14 +451,11 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         badge.className = 'badge warn';
         if (version) version.textContent = '';
         seen.textContent = '';
-        if (startBtn) startBtn.disabled = true;
-        if (stopBtn) stopBtn.disabled = true;
         if (natBtn) natBtn.disabled = true;
-        if (qualitySel) qualitySel.disabled = true;
-        const mapBtn = root.querySelector('#cmd-nat-map') as HTMLButtonElement | null;
         if (mapBtn) mapBtn.disabled = true;
         fillHelperDl(false);
       }
+      applyToggleButton(lastStatus);
 
       // Report the ack for the command we sent (or the latest one from this helper).
       const last = status.lastCommand;
@@ -424,7 +474,13 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
           out.textContent = t('host.cmdRejected', { command: last.command, detail });
           out.className = 'statusline error';
         }
-        if (lastSentId === last.id) lastSentId = null;
+        if (lastSentId === last.id) {
+          lastSentId = null;
+          clearPendingToggle();
+          // The ack carries the helper's new state — re-render the toggle now
+          // instead of waiting for the next poll.
+          applyToggleButton({ connected: true, state: last.state ?? lastStatus.state });
+        }
       }
     } catch {
       /* transient */
@@ -439,6 +495,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
       if (!res.delivered) {
         out.textContent = t('host.cmdNotDelivered', { command });
         out.className = 'statusline error';
+        clearPendingToggle();
+        applyToggleButton(lastStatus);
         return;
       }
       lastSentId = res.id ?? null;
@@ -449,6 +507,8 @@ export async function renderHost(root: HTMLElement, query: URLSearchParams): Pro
         err: err instanceof Error ? err.message : String(err),
       });
       out.className = 'statusline error';
+      clearPendingToggle();
+      applyToggleButton(lastStatus);
     }
   };
 
